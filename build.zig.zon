@@ -1,0 +1,6 @@
+.{
+    .name = "my-algos-in-zig",
+    .version = "0.0.0",
+    .dependencies = .{},
+    .paths = .{"."},
+}
