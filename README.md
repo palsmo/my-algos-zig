@@ -4,3 +4,9 @@
 <!-- short description: -->
 <h3>Collection of algorithms implemented in Zig ⚡</h3>
 </div>
+
+### Run Tests
+
+```shell
+zig build test --summary all
+```
