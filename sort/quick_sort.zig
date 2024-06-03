@@ -17,7 +17,7 @@ fn partition(comptime T: type, items: []T, lo: usize, hi: usize) usize {
 
     // balanced pivot results in the best performance,
     // especially on already ordered arrays that would
-    // otherwise be O(n) instead of O(n log(n)) complexity
+    // otherwise be O(n^2) complexity
     const mi_less_lo = items[mi] < items[lo];
     const lo_less_hi = items[lo] < items[hi];
     const hi_less_mi = items[hi] < items[mi];
