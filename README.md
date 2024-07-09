@@ -5,8 +5,10 @@
 <h3>A collection of common algorithms and data structures written in Zig ⚡</h3>
 </div>
 
+<!--
 ### Run Tests
 
 ```shell
 zig build test --summary all
 ```
+-->

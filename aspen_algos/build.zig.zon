@@ -1,0 +1,18 @@
+.{
+    .name = "aspen_algos",
+    .version = "0.0.0",
+    .dependencies = .{
+        .bamboo_structs = .{
+            .path = "../bamboo_structs",
+        },
+        .maple_utils = .{
+            .path = "../maple_utils",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "root.zig",
+        "src",
+    },
+}
