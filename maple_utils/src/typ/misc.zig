@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const expectEqual = std.testing.expectEqual;
+const panic = std.debug.panic;
 
 /// Assert that type `T` is pointer to an array.
 /// If successful returns the child type on the array.
@@ -16,7 +17,7 @@ pub fn PointerArrayChildType(comptime T: type) type {
         else => {
             const info_child = @typeInfo(info.Pointer.child);
             if (info_child != .Array) {
-                @compileError("Expected array, found " ++ @typeName(info.Pointer.child));
+                @compileError("Expected array child, found " ++ @typeName(info.Pointer.child));
             }
             return info_child.Array.child;
         },
@@ -27,9 +28,9 @@ test PointerArrayChildType {
     const T = u8;
     const array = [_]T{ 4, 4, 4, 4 };
 
-    comptime { // test array pointer
-        const ptr: *const [array.len]T = &array;
-        const C = PointerArrayChildType(@TypeOf(ptr));
+    comptime { // test slice
+        const slice: []const T = &array;
+        const C = PointerArrayChildType(@TypeOf(slice));
         expectEqual(T, C) catch unreachable;
     }
 
@@ -39,60 +40,97 @@ test PointerArrayChildType {
         expectEqual(T, C) catch unreachable;
     }
 
-    comptime { // test slice
-        const slice: []const T = &array;
-        const C = PointerArrayChildType(@TypeOf(slice));
+    comptime { // test one pointer
+        const ptr: *const [array.len]T = &array;
+        const C = PointerArrayChildType(@TypeOf(ptr));
         expectEqual(T, C) catch unreachable;
+    }
+    { // TODO! test compile error case (currently not possible)
+    }
+}
+
+/// Assert that type `T` matches any of `types`.
+/// `types` should be a tuple of `std.builtin.Type(enum)` to check against.
+/// E.g. assertType(T, .{ .Int, .Float });
+pub fn assertType(comptime T: type, comptime types: anytype) void {
+    // check `types` type
+    const S = @TypeOf(types);
+    const S_info = @typeInfo(S);
+    if (S_info != .Struct or !S_info.Struct.is_tuple) {
+        @compileError("Expected tuple for `types` argument, found '" ++ @typeName(S) ++ "'.");
+    }
+
+    const T_info = @typeInfo(T);
+    inline for (types) |t| {
+        if (@TypeOf(t) != @TypeOf(.enum_literal)) {
+            @compileError("Non 'std.builtin.Type' passed as argument in `types`.");
+        }
+        if (T_info == t) return;
+    }
+    @compileError("Type '" ++ @typeName(T) ++ "' does not match any in `types`.");
+}
+
+test assertType {
+    comptime { // test correct case
+        const T = u8;
+        const B = bool;
+        const types = .{ .Int, .Bool };
+        assertType(T, types);
+        assertType(B, types);
+    }
+    { // TODO! test compile error case (currently not possible)
     }
 }
 
 /// Assert that type `Fn` is of the form: 'fn (in...) out'.
 /// `in` should be a tuple of expected parameter types (ordered).
-/// `out' should be the expected return type.
-pub fn assertFn(comptime Fn: type, comptime in: anytype, comptime out: type) void {
-    // check function type
-    const fn_type_info = @typeInfo(Fn);
-    if (fn_type_info != .Fn) {
-        @compileError("Expected function for 'Fn' argument, found " ++ @typeName(Fn));
+/// `Out` should be the expected return type.
+pub fn assertFn(comptime Fn: type, comptime in: anytype, comptime Out: type) void {
+    // check `Fn` type
+    const Fn_info = @typeInfo(Fn);
+    if (Fn_info != .Fn) {
+        @compileError("Expected function-type for `F` argument, found '" ++ @typeName(Fn) ++ "'.");
     }
 
-    // check input type
-    const in_type = @TypeOf(in);
-    const in_type_info = @typeInfo(in_type);
-    if (in_type_info != .Struct) {
-        @compileError("Expected tuple for 'in' argument, found " ++ @typeName(in_type));
+    // check `in` type
+    const I = @TypeOf(in);
+    const I_info = @typeInfo(I);
+    if (I_info != .Struct or !I_info.Struct.is_tuple) {
+        @compileError("Expected tuple for `in` argument, found '" ++ @typeName(I) ++ "'.");
     }
 
     // check number of parameters
-    const params = fn_type_info.Fn.params;
-    if (params.len != in_type_info.Struct.fields.len) {
+    const params = Fn_info.Fn.params;
+    if (params.len != I_info.Struct.fields.len) {
         @compileError("Expected same parameter count, found " ++
             std.fmt.comptimePrint("{d}", .{params.len}) ++ "!=" ++
-            std.fmt.comptimePrint("{d}", .{in_type_info.Struct.fields.len}));
+            std.fmt.comptimePrint("{d}", .{I_info.Struct.fields.len}));
     }
 
     // check parameter types
     inline for (params, 0..) |param, i| {
-        const expect_type = param.type.?;
-        const actual_type = in[i];
-        if (expect_type != actual_type) {
+        const Expect = param.type.?;
+        const actual = in[i];
+        if (Expect != actual) {
             @compileError("Type mismatch for parameter " ++ std.fmt.comptimePrint("{d}", .{i}) ++
-                ", expected " ++ @typeName(expect_type) ++
-                ", found " ++ @typeName(actual_type));
+                ", expected '" ++ @typeName(Expect) ++
+                "', found '" ++ @typeName(actual) ++ "'.");
         }
     }
 
     // check return type
-    const return_type = fn_type_info.Fn.return_type.?;
-    if (return_type != out) {
-        @compileError("Return type mismatch, expected " ++
-            @typeName(out) ++ ", found " ++ @typeName(return_type));
+    const Return = Fn_info.Fn.return_type.?;
+    if (Return != Out) {
+        @compileError("Return type mismatch, expected '" ++
+            @typeName(Out) ++ "', found '" ++ @typeName(Return) ++ "'.");
     }
 }
 
 test assertFn {
-    comptime { // test successful case
+    comptime { // test correct case
         const foo_fn_type = fn (a: u32, b: u32) u32;
         assertFn(foo_fn_type, .{ u32, u32 }, u32);
+    }
+    { // TODO! test compile error case (currently not possible)
     }
 }

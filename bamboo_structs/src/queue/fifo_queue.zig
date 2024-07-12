@@ -13,14 +13,18 @@ pub fn FifoQueue(comptime T: type) type {
         const Self = @This();
 
         pub const Options = struct {
-            init_capacity: u32 = 100,
-            growable: bool = false,
+            // initial capacity of the queue
+            init_capacity: usize = 100,
+            // whether the map can grow beyond `init_capacity`
+            growable: bool = true,
         };
 
+        // struct fields
         buffer: []T,
         head: usize = 0,
         tail: usize = 0,
         len: usize = 0,
+        typ: enum { Runtime, Buffer, Comptime },
         options: Options,
         allocator: ?Allocator,
 
@@ -37,22 +41,35 @@ pub fn FifoQueue(comptime T: type) type {
 
             return .{
                 .buffer = try allocator.alloc(T, options.init_capacity),
+                .typ = .Runtime,
                 .options = options,
                 .allocator = allocator,
             };
         }
 
-        /// Initialize the queue for comptime usage.
-        /// Allocating memory in read-only data.
+        /// Initialize the queue to work with static space in buffer `buf`.
+        /// Ignores `options.init_capacity` and sets `options.growable` to false.
+        pub fn initBuffer(buf: []T, options: Options) Self {
+            return .{
+                .buffer = buf,
+                .typ = .Buffer,
+                .options = options{ .growable = false },
+                .allocator = null,
+            };
+        }
+
+        /// Initialize the queue, allocating memory in read-only data or
+        /// compiler's address space if not referenced runtime.
         pub fn initComptime(comptime options: Options) Self {
             if (!@inComptime()) panic("Invalid at runtime.", .{});
             if (options.init_capacity == 0) panic("Can't initialize with zero size.", .{});
 
             return .{
-                .buffer = blk: {
+                .buffer = blk: { // compiler promotes, not 'free-after-use'
                     var buf: [options.init_capacity]T = undefined;
-                    break :blk &buf; // pointer to ro-data
+                    break :blk &buf;
                 },
+                .typ = .Comptime,
                 .options = options,
                 .allocator = null,
             };
@@ -61,7 +78,7 @@ pub fn FifoQueue(comptime T: type) type {
         /// Release allocated memory, cleanup routine for 'init'.
         pub fn deinit(self: *Self) void {
             if (self.allocator) |ally| {
-                ally.free(self.stack);
+                ally.free(self.buffer);
             } else {
                 panic("Can't use `null` allocator.", .{});
             }
@@ -108,19 +125,18 @@ pub fn FifoQueue(comptime T: type) type {
         /// Copy over current content into new buffer of twice the size.
         fn grow(self: *Self) !void {
             const new_capacity = self.buffer.len * 2;
-            const new_buffer = blk: {
-                if (@inComptime()) {
+            const new_buffer = switch (self.typ) {
+                .Runtime => try self.allocator.?.alloc(T, new_capacity),
+                .Buffer => unreachable,
+                .Comptime => blk: { // compiler promotes, not 'free-after-use'
+                    if (!@inComptime()) panic("Can't grow comptime buffer at runtime.", .{});
                     var buf: [new_capacity]T = undefined;
-                    break :blk &buf; // pointer to ro-data
-                } else {
-                    const buf = try self.allocator.?.alloc(T, new_capacity);
-                    break :blk buf;
-                }
+                    break :blk &buf;
+                },
             };
 
             if (self.head < self.tail) {
                 // * `tail` is not wrapped around
-
                 const whole_part_len = (self.tail - self.head) + 1;
 
                 // copy over whole part
@@ -129,7 +145,6 @@ pub fn FifoQueue(comptime T: type) type {
                 @memcpy(new_mem, old_mem);
             } else {
                 // * `tail` is wrapped around
-
                 const first_part_len = self.len - self.head;
 
                 // copy over first part
@@ -144,6 +159,7 @@ pub fn FifoQueue(comptime T: type) type {
             }
 
             if (!@inComptime()) self.allocator.?.free(self.buffer);
+
             self.buffer = new_buffer;
             self.head = 0;
             self.tail = self.len;
@@ -158,25 +174,36 @@ const expectError = std.testing.expectError;
 
 test "peek empty queue expect null" {
     comptime {
-        var queue = FifoQueue(u8).initComptime(.{});
+        var queue = FifoQueue(u8).initComptime(.{ .init_capacity = 1 });
         const result = queue.peek();
 
         expectEqual(null, result) catch unreachable;
     }
 }
 
-test "pop empty stack expect underflow error" {
+test "pop empty queue expect underflow error" {
     comptime {
-        var queue = FifoQueue(u8).initComptime(.{});
+        var queue = FifoQueue(u8).initComptime(.{ .init_capacity = 1 });
         const result = queue.pop();
 
         expectError(Error.Underflow, result) catch unreachable;
     }
 }
 
+test "push too many expect overflow error" {
+    comptime {
+        var queue = FifoQueue(u8).initComptime(.{ .init_capacity = 1 });
+        const value: u8 = 4;
+        _ = queue.push(value) catch unreachable;
+        const result = queue.push(value);
+
+        expectError(Error.Overflow, result) catch unreachable;
+    }
+}
+
 test "push one and pop one" {
     comptime {
-        var queue = FifoQueue(u8).initComptime(.{});
+        var queue = FifoQueue(u8).initComptime(.{ .init_capacity = 1 });
         const value: u8 = 4;
         queue.push(value) catch unreachable;
         const _value = queue.pop();
@@ -189,7 +216,8 @@ test "push one and pop one (runtime)" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    var queue = try FifoQueue(u8).initRuntime(.{}, arena.allocator());
+    var queue = try FifoQueue(u8).initRuntime(.{ .init_capacity = 1 }, arena.allocator());
+    defer queue.deinit();
     const value: u8 = 4;
     try queue.push(value);
     const _value = queue.pop();
@@ -197,13 +225,15 @@ test "push one and pop one (runtime)" {
     try expectEqual(value, _value);
 }
 
-test "push too many expect overflow error" {
+test "grow growable queue when reached capacity" {
     comptime {
-        const capacity: u32 = 1;
-        var queue = FifoQueue(u8).initComptime(.{ .init_capacity = capacity });
-        _ = queue.push(4) catch unreachable;
-        const result = queue.push(4);
+        var queue = FifoQueue(u8).initComptime(.{ .init_capacity = 2, .growable = true });
+        const value: u8 = 4;
+        queue.push(value) catch unreachable;
+        queue.push(value) catch unreachable;
+        const result = queue.push(value);
 
-        expectError(Error.Overflow, result) catch unreachable;
+        try expectEqual({}, result);
+        try expectEqual(queue.options.init_capacity * 2, queue.buffer.len);
     }
 }

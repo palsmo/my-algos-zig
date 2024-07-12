@@ -9,7 +9,7 @@ const Error = root.Error;
 const native_endian = builtin.cpu.arch.endian();
 const panic = std.debug.panic;
 
-// TODO: Implement 'growable' option like in './struct/queue/fifo.zig'
+// TODO: Implement 'growable' option like in '/src/queue/fifo_queue.zig'
 
 /// Can store any value and retrieve any value by translating between bytes.
 /// Values are aligned to byte boundaries and stored within the fewest bytes.
@@ -44,15 +44,16 @@ pub const ByteStack = struct {
         };
     }
 
-    /// Initialize the stack for comptime usage.
+    /// Initialize the stack, allocating memory in read-only data or
+    /// compiler's address space if not referenced runtime.
     /// Allocating memory in read-only data.
     pub fn initComptime(comptime bytes: usize, comptime options: Options) Self {
         if (!@inComptime()) panic("Invalid at runtime.", .{});
         if (bytes == 0) panic("Can't initialize with zero size.", .{});
         return .{
-            .stack = blk: {
+            .stack = blk: { // compiler promoted, not 'free-after-use'
                 var buf: [bytes]u8 = undefined;
-                break :blk &buf; // pointer to ro-data
+                break :blk &buf;
             },
             .top = bytes, // start at the top (stack grows downwards)
             .options = options,

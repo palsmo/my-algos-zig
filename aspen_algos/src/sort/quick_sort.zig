@@ -9,7 +9,6 @@ const maple = @import("maple_utils");
 const bamboo = @import("bamboo_structs");
 
 const Allocator = std.mem.Allocator;
-const RandomArray = maple.RandomArray;
 const VStack = bamboo.stack.ByteStack;
 const assert = std.debug.assert;
 const swap = maple.mem.swap;
@@ -17,9 +16,9 @@ const swap = maple.mem.swap;
 /// Sort items of type `T`.
 /// Most efficient for medium (>100 items) to large data sets (<10_000_000 items).
 /// Less efficient for substantially sorted sets, by default 'median-of-three' pivot
-/// selection is used which brings worst-case close to O(n log n) time.
+/// selection is used which brings worst-case closer to O(n log n) time.
 /// Properties:
-/// Unstable, in-place, time-complexity best O(n), average O(n log n) and worst case ~O(n^2).
+/// Unstable, in-place, best O(n), average O(n log n) and worst case ~O(n^2).
 /// Memory consumption is O(n) during and O(1) post.
 pub fn QuickSort(comptime T: type) type {
     return struct {
@@ -33,8 +32,8 @@ pub fn QuickSort(comptime T: type) type {
             // namespace containing:
             // eql: inline fn(T: type, a: T, b: T) bool
             comptime ctx: type = struct {
-                inline fn eql(T: type, a: T, b: T) bool {
-                    return a == b;
+                inline fn cmp(T: type, a: T, b: T) std.math.Order {
+                    return maple.mem.cmp(T, a, b);
                 }
             },
         };
@@ -110,6 +109,7 @@ pub fn QuickSort(comptime T: type) type {
                 return schemes.lomutos(T, items, lo, hi, pi);
                 //return scheme.hoares(T, items, p, lo, hi);
             } else {
+                //if (self.ctx.cmp(T, items[lo], items[hi]) == .gt)
                 if (items[lo] > items[hi]) {
                     swap(T, &items[lo], &items[hi]);
                 }

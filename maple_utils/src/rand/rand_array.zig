@@ -14,6 +14,15 @@ pub fn RandomArray(comptime T: type) type {
     }
 
     return struct {
+        const Self = @This();
+
+        allocator: Allocator,
+
+        /// Initialize for use.
+        pub fn init(allocator: Allocator) Self {
+            return .{ .allocator = allocator };
+        }
+
         /// Get a slice of random values of length `size` allocated on the heap.
         /// After use; ensure release of memory i.e. 'allocator.free(<slice>)'.
         pub fn get(size: usize, allocator: Allocator) ![]T {

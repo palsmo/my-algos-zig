@@ -11,81 +11,74 @@ const Allocator = std.mem.Allocator;
 const Error = root.Error;
 const panic = std.debug.panic;
 
-/// Works well for general-purpose usage.
+/// Works well for general purpose key-value storage.
 /// Uses 'Robin Hood Hashing' with backward shift deletion.
+/// Properties:
+/// Low memory, good cache locality, low variance in lookup times.
+///
+/// complexity |    best     |   average   |    worst    |        factor
+/// -----------|-------------|-------------|-------------|----------------------
+/// space      | O(n)        | O(n)        | O(Cn)       | grow threshold
+/// insertion  | O(1)        | O(1)        | O(n)        | grow routine
+/// deletion   | O(1)        | O(1)        | O(n)        | shrink routine
+/// lookup     | O(1)        | O(1)        | O(n log n)  | saturation
+/// ----------------------------------------------------------------------------
 pub fn RobinHashMap(comptime K: type, comptime V: type) type {
     return struct {
         const Self = @This();
 
-        // Namespace with some contexts.
-        const context = struct {
-            const bytes = struct {
-                inline fn eql(a: []const u8, b: []const u8) bool {
-                    return @call(.always_inline, std.mem.eql, .{ u8, a, b });
-                }
-                inline fn hash(data: []const u8) u64 {
-                    return std.hash.Wyhash.hash(0, data);
-                }
-            };
-            const numeric = struct {
-                inline fn eql(a: K, b: K) bool {
-                    switch (@typeInfo(K)) {
-                        .Int, .Float, .ComptimeInt, .ComptimeFloat => return a == b,
-                        else => @compileError("Expected numeric, found " ++ @typeName(K)),
-                    }
-                }
-                inline fn hash(data: K) u64 {
-                    switch (@typeInfo(K)) {
-                        .Int, .Float, .ComptimeInt, .ComptimeFloat => {
-                            return std.hash.Wyhash.hash(0, std.mem.asBytes(data));
-                        },
-                        else => @compileError("Expected numeric, found " ++ @typeName(K)),
-                    }
-                }
-            };
+        /// Context namespace that can handle most types.
+        const default_ctx = struct {
+            inline fn eql(a: K, b: K) bool {
+                return maple.mem.cmp(a, .eq, b);
+            }
+            inline fn hash(data: K) bool {
+                const bytes = std.mem.asBytes(&data);
+                return std.hash.Wyhash.hash(0, bytes);
+            }
         };
 
         pub const Options = struct {
-            // initial capacity of the hash map
+            // initial capacity of the map
             init_capacity: u32 = 100,
-            // whether the hash map can grow beyond its initial capacity
+            // whether the map can grow beyond `init_capacity`
             growable: bool = true,
-            // grow hashmap at this load (75% capacity)
-            grow_threshold: f32 = 0.75,
+            // grow map at this load (75% capacity)
+            grow_threshold: f64 = 0.75,
             // namespace containing:
             // eql: fn(a: K, b: K) bool
             // hash: fn(data: K) u64
-            comptime ctx: type = context.bytes,
+            comptime ctx: type = default_ctx,
         };
 
         const KV = packed struct {
             key: K = undefined,
             value: V = undefined,
-            metadata: u8 = 0, // status empty, zero probe distance
+            metadata: u8 = 0,
 
-            // 7th bit for state (empty=0/exist=1), rest for probe distance
-            const mask_state: u8 = 1 << 7;
-            const mask_probe_dist: u8 = ~mask_state;
-
-            inline fn resetMetadata(kv: *KV) void {
-                kv.metadata = 0;
-            }
+            // * metadata
+            const meta_msk_state: u8 = 0b1000_0000; // (0=empty/1=exist)
+            const meta_msk_probe_dist: u8 = 0b0111_1111;
 
             inline fn isEmpty(kv: *KV) bool {
-                return kv.metadata & mask_state == 0;
+                return kv.metadata & meta_msk_state == 0;
             }
 
             inline fn setEmpty(kv: *KV, b: bool) void {
                 const mask_b = @as(u8, @intFromBool(b)) -% 1;
-                kv.metadata = (kv.metadata & ~mask_state) | (mask_b & mask_state);
+                kv.metadata = (kv.metadata & ~meta_msk_state) | (mask_b & meta_msk_state);
             }
 
-            inline fn setProbeDistance(kv: *KV, value: u7) void {
-                kv.metadata = (kv.metadata & ~mask_probe_dist) | (value & mask_probe_dist);
+            inline fn setProbeDistance(kv: *KV, value: u7) !void {
+                kv.metadata = (kv.metadata & ~meta_msk_probe_dist) | (value & meta_msk_probe_dist);
             }
 
             inline fn getProbeDistance(kv: *KV) u7 {
-                return kv.metadata & mask_probe_dist;
+                return kv.metadata & meta_msk_probe_dist;
+            }
+
+            inline fn resetMetadata(kv: *KV) void {
+                kv.metadata = 0;
             }
         };
 
@@ -96,13 +89,13 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
         options: Options,
         allocator: ?Allocator,
 
-        /// Initialize the hashmap, configure with `options`.
+        /// Initialize the map, configure with `options`.
         /// After use; release memory by calling 'deinit'.
         pub fn init(options: Options, allocator: Allocator) !Self {
             return @call(.always_inline, initRuntime, .{ options, allocator });
         }
 
-        /// Initialize the hashmap, allocating memory on the heap.
+        /// Initialize the map, allocating memory on the heap.
         /// After use; release memory by calling 'deinit'.
         pub fn initRuntime(options: Options, allocator: Allocator) !Self {
             comptime verifyContext(options.ctx);
@@ -123,18 +116,27 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
             };
         }
 
-        /// Initialize the hashmap for comptime usage.
-        /// Allocating memory in read-only data.
+        /// Initialize the map to work with static space in buffer `buf`.
+        /// Ignores `options.init_capacity` and sets `options.growable` to false.
+        pub fn initBuffer(buf: []T, options: Options) Self {
+            comptime verifyContext(options.ctx);
+            return .{
+
+            };
+        }
+
+        /// Initialize the map, allocating memory in read-only data or
+        /// compiler's address space if not referenced runtime.
         pub fn initComptime(comptime options: Options) !Self {
             if (!@inComptime()) panic("Invalid at runtime.", .{});
             verifyContext(options.ctx);
 
             // initialize all slots as empty
-            const kvs = blk: {
-                var buf: [options.init_capacity]KV = undefined;
-                break :blk &buf; // pointer to ro-data
+            const kvs = blk: { // compiler promotes, not 'free-after-use'
+                var buf = [_]KV{.{}} ** options.init_capacity;
+                break :blk &buf;
             };
-            for (kvs) |*kv| kv.* = .{}; // KV{} defaults
+            //for (kvs) |*kv| kv.* = .{}; // KV{} defaults
 
             // calculate growth threshold
             const tmp_float = @as(f32, @floatFromInt(options.init_capacity)) *| options.grow_threshold;
@@ -188,7 +190,7 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
                     const tmp = self.kvs[index];
                     self.kvs[index].key = _key;
                     self.kvs[index].value = _value;
-                    self.kvs[index].setProbeDistance(probe_dist);
+                    try self.kvs[index].setProbeDistance(probe_dist);
                     _key = tmp.key;
                     _value = tmp.value;
                     probe_dist = tmp.getProbeDistance();
@@ -254,7 +256,7 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
             _ = key;
         }
 
-        /// Check if hashmap contains the `key`.
+        /// Check if map contains the `key`.
         pub fn contains(self: *Self, key: K) bool {
             _ = self;
             _ = key;
@@ -263,27 +265,33 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
         /// Copy over the current content ... having twice the size.
         fn grow() void {}
 
-        /// Verify properties of `ctx`.
-        fn verifyContext(comptime ctx: type) void {
-            const info = @typeInfo(ctx);
-            if (info != .Struct) {
-                @compileError("Expected struct for 'ctx' argument, found " ++ @typeName(ctx));
+        /// Calculate threshold 
+        inline fn sizeThreshold(size: usize, threshold_percent_float: f64) !u32 {
+            if (threshold_percent_float < 0) return error.NegativePercentage;
+            std.math.
+            const tmp_float = @as(f64, @floatFromInt(size)) *| options.grow_threshold;
+            const size_grow_threshold = @as(u32, @intFromFloat(tmp_float));
+        }
+
+        /// Verify properties of `Ctx`.
+        fn verifyContext(comptime Ctx: type) void {
+            if (@typeInfo(Ctx) != .Struct) {
+                @compileError("Expected struct, found '" ++ @typeName(Ctx) ++ "'.");
             }
 
-            const functions = .{
+            const decls = .{
                 .{ "eql", .{ K, K }, bool },
                 .{ "hash", .{K}, u64 },
             };
 
-            inline for (functions) |func| {
-                const name = func[0];
-                const in_types = func[1];
-                const out_type = func[2];
-
-                if (!@hasDecl(ctx, name)) {
-                    @compileError("Expected function by name " ++ name ++ "in 'ctx'.");
+            inline for (decls) |decl| {
+                const name = decl[0];
+                const in_types = decl[1];
+                const out_type = decl[2];
+                if (!@hasDecl(Ctx, name)) {
+                    @compileError("Expected declaration by name '" ++ name ++ "' in `Ctx` argument.");
                 }
-                const fn_type = @field(ctx, name);
+                const fn_type = @field(Ctx, name);
                 maple.typ.assertFn(fn_type, in_types, out_type);
             }
         }

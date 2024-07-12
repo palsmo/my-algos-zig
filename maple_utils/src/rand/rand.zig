@@ -1,11 +1,11 @@
-const rand_array = @import("./rand_array.zig");
+const misc = @import("./misc.zig");
 
 // exports -->
 
-pub const RandomArray = rand_array.RandomArray;
+pub const getSlice = misc.getSlice;
 
 // testing -->
 
 test {
-    _ = rand_array;
+    _ = misc;
 }
