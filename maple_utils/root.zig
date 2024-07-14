@@ -1,6 +1,6 @@
-pub const math = @import("./src/math/math.zig");
-pub const mem = @import("./src/mem/mem.zig");
-pub const typ = @import("./src/typ/typ.zig");
+pub const math = @import("./src/math/root.zig");
+pub const mem = @import("./src/mem/root.zig");
+pub const typ = @import("./src/typ/root.zig");
 
 test {
     _ = math;

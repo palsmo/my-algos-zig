@@ -4,6 +4,7 @@ const misc = @import("./misc.zig");
 
 pub const PointerArrayChildType = misc.PointerArrayChildType;
 pub const assertFn = misc.assertFn;
+pub const assertType = misc.assertType;
 
 // testing -->
 

@@ -1,19 +1,23 @@
+//! Author: Palsmo
+
 const std = @import("std");
 const math = std.math;
 
-const root = @import("./math.zig");
+const _typ = @import("../typ/root.zig");
+const shared = @import("./shared.zig");
 
-const Error = root.Error;
+const Error = shared.Error;
+const assertType = _typ.assertType;
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const panic = std.debug.panic;
 
 /// Retrieve 10 to the power of `exp`.
 /// Interface for 'power\_of\_10\_table_...'.
-pub inline fn pow10(exp: u4, comptime typ: enum { float, int }) if (typ == .float) f64 else u64 {
+pub inline fn pow10(exp: u4, comptime typ: enum { Float, Int }) if (typ == .Float) f64 else u64 {
     switch (typ) {
-        .float => return power_of_10_table_float[exp],
-        .int => return power_of_10_table_int[exp],
+        .Float => return power_of_10_table_float[exp],
+        .Int => return power_of_10_table_int[exp],
     }
 }
 
@@ -60,13 +64,13 @@ pub fn mulPercent(percent_float: f64, n: usize, options: struct { precision: u4 
     }
 
     // convert percentage to fixed-point
-    const precision_p10_float: f64 = pow10(options.precision, .float);
+    const precision_p10_float: f64 = pow10(options.precision, .Float);
     const percent_fixed: u64 = @intFromFloat(percent_float * precision_p10_float);
 
     const result_full: u128 = @as(u128, n) * @as(u128, percent_fixed);
 
     // * effectively rounds up when `result_full` frac-part >= "0.5", down otherwise
-    const precision_p10_int: u64 = pow10(options.precision, .int);
+    const precision_p10_int: u64 = pow10(options.precision, .Int);
     const result_round: u128 = result_full + (precision_p10_int >> 1); // i.e. precision_p10_int / 2
     const result: u128 = result_round / precision_p10_int;
 
@@ -94,6 +98,43 @@ test mulPercent {
         try expectEqual(max_usize, mulPercent(1.0, max_usize, .{}));
         try expectEqual((max_usize + 1) / 2, mulPercent(0.5, max_usize, .{}));
     }
+}
+
+/// Returns an incremented `value`, wrapping according to [`min`, `max`).
+pub inline fn wrapIncrement(comptime T: type, value: T, min: T, max: T) T {
+    comptime assertType(T, .{ .Int, .Float, .ComptimeInt, .ComptimeFloat });
+    const new_value = value + 1;
+    return if (new_value < max) new_value else min;
+}
+
+test wrapIncrement {
+    const value_a: u8 = 3;
+    const value_b: i8 = 3;
+    const value_c: f16 = 3.0;
+    const value_d: u8 = 1;
+
+    try expectEqual(@as(u8, 0), wrapIncrement(u8, value_a, 0, 4));
+    try expectEqual(@as(i8, -1), wrapIncrement(i8, value_b, -1, 4));
+    try expectEqual(@as(f16, 1.0), wrapIncrement(f16, value_c, 1.0, 4.0));
+    try expectEqual(@as(u8, 2), wrapIncrement(u8, value_d, 0, 4)); // non-wrap case
+}
+
+/// Returns a decremented `value`, wrapping according to [`min`, `max`).
+pub inline fn wrapDecrement(comptime T: type, value: T, min: T, max: T) T {
+    comptime assertType(T, .{ .Int, .Float, .ComptimeInt, .ComptimeFloat });
+    return if (min < value) value - 1 else max - 1;
+}
+
+test wrapDecrement {
+    const value_a: u8 = 0;
+    const value_b: i8 = -1;
+    const value_c: f16 = 1.0;
+    const value_d: u8 = 3;
+
+    try expectEqual(@as(u8, 3), wrapDecrement(u8, value_a, 0, 4));
+    try expectEqual(@as(i8, 3), wrapDecrement(i8, value_b, -1, 4));
+    try expectEqual(@as(f16, 3.0), wrapDecrement(f16, value_c, 1.0, 4.0));
+    try expectEqual(@as(u8, 2), wrapDecrement(u8, value_d, 0, 4)); // non-wrap case
 }
 
 ////pub fn entropy() f64 {}

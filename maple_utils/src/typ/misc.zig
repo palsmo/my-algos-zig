@@ -50,10 +50,9 @@ test PointerArrayChildType {
 }
 
 /// Assert that type `T` matches any of `types`.
-/// `types` should be a tuple of `std.builtin.Type(enum)` to check against.
+/// Argument `types` should be a tuple of `std.builtin.Type(enum)`.
 /// E.g. assertType(T, .{ .Int, .Float });
 pub fn assertType(comptime T: type, comptime types: anytype) void {
-    // check `types` type
     const S = @TypeOf(types);
     const S_info = @typeInfo(S);
     if (S_info != .Struct or !S_info.Struct.is_tuple) {
