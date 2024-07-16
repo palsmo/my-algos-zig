@@ -12,9 +12,27 @@ const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const panic = std.debug.panic;
 
+/// Assert that `int` is a power of two.
+pub inline fn assertPowOf2(int: anytype) void {
+    if (isPowOf2(int)) return;
+    panic("Value is not a power of two, found '{}'", .{int});
+}
+
+/// Check if `int` is a power of two.
+/// Utilizing the fact that powers of 2 only has one bit set.
+pub inline fn isPowOf2(int: anytype) bool {
+    comptime assertType(@TypeOf(int), .{ .Int, .ComptimeInt });
+    return int != 0 and (int & (int - 1)) == 0;
+}
+
+test isPowOf2 {
+    try expect(isPowOf2(2));
+    try expect(!isPowOf2(3));
+}
+
 /// Retrieve 10 to the power of `exp`.
 /// Interface for 'power\_of\_10\_table_...'.
-pub inline fn pow10(exp: u4, comptime typ: enum { Float, Int }) if (typ == .Float) f64 else u64 {
+pub inline fn getPow10(exp: u4, comptime typ: enum { Float, Int }) if (typ == .Float) f64 else u64 {
     switch (typ) {
         .Float => return power_of_10_table_float[exp],
         .Int => return power_of_10_table_int[exp],
@@ -55,8 +73,8 @@ test power_of_10_table_int {
 
 /// Multiply some percentage `percentage_float` with some number `n`.
 /// Useful for calculating tresholds for (u)sizes and similar.
-/// Asserts that `percent_float` is within range [0.0, 1.0].
-/// Adjust precision of `percent_float` by setting number of decimal places with `options.precision`.
+/// Adjust precision of `percent_float` by number of decimal places with `options.precision`.
+/// Asserts that `percent_float` is within range [0.0, 1.0] (* avoids need to handle error).
 pub fn mulPercent(percent_float: f64, n: usize, options: struct { precision: u4 = 2 }) usize {
     // checking `percent_float`
     if (!math.isFinite(percent_float) or percent_float < 0 or percent_float > 1.0) {
@@ -64,59 +82,55 @@ pub fn mulPercent(percent_float: f64, n: usize, options: struct { precision: u4 
     }
 
     // convert percentage to fixed-point
-    const precision_p10_float: f64 = pow10(options.precision, .Float);
+    const precision_p10_float: f64 = getPow10(options.precision, .Float);
     const percent_fixed: u64 = @intFromFloat(percent_float * precision_p10_float);
 
     const result_full: u128 = @as(u128, n) * @as(u128, percent_fixed);
 
     // * effectively rounds up when `result_full` frac-part >= "0.5", down otherwise
-    const precision_p10_int: u64 = pow10(options.precision, .Int);
-    const result_round: u128 = result_full + (precision_p10_int >> 1); // i.e. precision_p10_int / 2
+    const precision_p10_int: u64 = getPow10(options.precision, .Int);
+    const result_round: u128 = result_full + (precision_p10_int / 2);
     const result: u128 = result_round / precision_p10_int;
 
     return @intCast(result);
 }
 
 test mulPercent {
-    { // test functionality
-        try expectEqual(@as(usize, 3), mulPercent(0.3, 10, .{}));
-        try expectEqual(@as(usize, 0), mulPercent(0.0, 10, .{}));
-        try expectEqual(@as(usize, 0), mulPercent(0.5, 0, .{}));
-        try expectEqual(@as(usize, 10), mulPercent(1.0, 10, .{}));
-    }
-    { // test rounding
-        try expectEqual(@as(usize, 3), mulPercent(0.33, 10, .{}));
-        try expectEqual(@as(usize, 7), mulPercent(0.66, 10, .{}));
-    }
-    { // test precision
-        try expectEqual(@as(usize, 0), mulPercent(0.9, 100, .{ .precision = 0 }));
-        try expectEqual(@as(usize, 100), mulPercent(1.0, 100, .{ .precision = 0 }));
-        try expectEqual(@as(usize, 4_567), mulPercent(0.4567, 10_000, .{ .precision = 4 }));
-    }
-    { // test large `n`
-        const max_usize = math.maxInt(usize);
-        try expectEqual(max_usize, mulPercent(1.0, max_usize, .{}));
-        try expectEqual((max_usize + 1) / 2, mulPercent(0.5, max_usize, .{}));
-    }
+    // test basic
+    try expectEqual(@as(usize, 3), mulPercent(0.3, 10, .{}));
+    try expectEqual(@as(usize, 10), mulPercent(1.0, 10, .{}));
+
+    // test edge cases
+    try expectEqual(@as(usize, 0), mulPercent(0.5, 0, .{}));
+    try expectEqual(@as(usize, 0), mulPercent(0.0, 10, .{}));
+
+    // test rounding
+    try expectEqual(@as(usize, 3), mulPercent(0.33, 10, .{}));
+    try expectEqual(@as(usize, 7), mulPercent(0.66, 10, .{}));
+
+    // test precision
+    try expectEqual(@as(usize, 0), mulPercent(0.9, 100, .{ .precision = 0 }));
+    try expectEqual(@as(usize, 100), mulPercent(1.0, 100, .{ .precision = 0 }));
+    try expectEqual(@as(usize, 4_567), mulPercent(0.4567, 10_000, .{ .precision = 4 }));
+
+    // test large `n`
+    const max_usize = math.maxInt(usize);
+    try expectEqual(max_usize, mulPercent(1.0, max_usize, .{}));
+    try expectEqual((max_usize + 1) / 2, mulPercent(0.5, max_usize, .{}));
 }
 
-/// Returns an incremented `value`, wrapping according to [`min`, `max`).
-pub inline fn wrapIncrement(comptime T: type, value: T, min: T, max: T) T {
+/// Returns an incremented `num`, wrapping according to [`min`, `max`).
+pub inline fn wrapIncrement(comptime T: type, num: T, min: T, max: T) T {
     comptime assertType(T, .{ .Int, .Float, .ComptimeInt, .ComptimeFloat });
-    const new_value = value + 1;
-    return if (new_value < max) new_value else min;
+    const new_num = num + 1;
+    return if (new_num < max) new_num else min;
 }
 
 test wrapIncrement {
-    const value_a: u8 = 3;
-    const value_b: i8 = 3;
-    const value_c: f16 = 3.0;
-    const value_d: u8 = 1;
-
-    try expectEqual(@as(u8, 0), wrapIncrement(u8, value_a, 0, 4));
-    try expectEqual(@as(i8, -1), wrapIncrement(i8, value_b, -1, 4));
-    try expectEqual(@as(f16, 1.0), wrapIncrement(f16, value_c, 1.0, 4.0));
-    try expectEqual(@as(u8, 2), wrapIncrement(u8, value_d, 0, 4)); // non-wrap case
+    try expectEqual(@as(u8, 0), wrapIncrement(u8, 3, 0, 4));
+    try expectEqual(@as(i8, -1), wrapIncrement(i8, 3, -1, 4));
+    try expectEqual(@as(f16, 1.0), wrapIncrement(f16, 3.0, 1.0, 4.0));
+    try expectEqual(@as(u8, 2), wrapIncrement(u8, 1, 0, 4)); // non-wrap case
 }
 
 /// Returns a decremented `value`, wrapping according to [`min`, `max`).
@@ -126,15 +140,10 @@ pub inline fn wrapDecrement(comptime T: type, value: T, min: T, max: T) T {
 }
 
 test wrapDecrement {
-    const value_a: u8 = 0;
-    const value_b: i8 = -1;
-    const value_c: f16 = 1.0;
-    const value_d: u8 = 3;
-
-    try expectEqual(@as(u8, 3), wrapDecrement(u8, value_a, 0, 4));
-    try expectEqual(@as(i8, 3), wrapDecrement(i8, value_b, -1, 4));
-    try expectEqual(@as(f16, 3.0), wrapDecrement(f16, value_c, 1.0, 4.0));
-    try expectEqual(@as(u8, 2), wrapDecrement(u8, value_d, 0, 4)); // non-wrap case
+    try expectEqual(@as(u8, 3), wrapDecrement(u8, 0, 0, 4));
+    try expectEqual(@as(i8, 3), wrapDecrement(i8, -1, -1, 4));
+    try expectEqual(@as(f16, 3.0), wrapDecrement(f16, 1.0, 1.0, 4.0));
+    try expectEqual(@as(u8, 2), wrapDecrement(u8, 3, 0, 4)); // non-wrap case
 }
 
 ////pub fn entropy() f64 {}

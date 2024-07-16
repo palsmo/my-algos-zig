@@ -3,11 +3,11 @@
 
 const std = @import("std");
 
-const deque = @import("./double_ended_queue.zig");
+const _deque = @import("./double_ended_queue.zig");
 const shared = @import("./shared.zig");
 
 const Allocator = std.mem.Allocator;
-const DoubleEndedQueue = deque.DoubleEndedQueue;
+const DoubleEndedQueue = _deque.DoubleEndedQueue;
 const Error = shared.Error;
 
 /// Queue items of type `T` with First-In-First-Out behavior.
@@ -24,73 +24,90 @@ const Error = shared.Error;
 /// deletion   | O(1)         | O(1)         | O(n)         | shrink routine
 /// lookup     | O(1)         | O(1)         | O(n log n)   | space saturation
 /// -------------------------------------------------------------------------------
-pub fn FifoQueue(comptime T: type) type {
+pub fn FifoQueue(comptime T: type, comptime buffer_type: enum { Alloc, Buffer, Comptime }) type {
     return struct {
         const Self = @This();
+        const Dequ = DoubleEndedQueue(T, buffer_type);
 
         pub const Options = struct {
             // initial capacity of the queue
             init_capacity: usize = 64,
             // whether the map can grow beyond `init_capacity`
             growable: bool = true,
+            // whether the map can shrink a grow,
+            // will half when size used falls below 1/4 of allocated
+            shrinkable: bool = true,
         };
 
         // struct fields
-        body: DoubleEndedQueue(T),
+        deque: Dequ,
 
-        /// Initialize the queue, configure with `options`.
-        /// After use; release memory by calling 'deinit'.
-        pub fn init(options: Options, allocator: Allocator) !Self {
-            return try @call(.always_inline, initAlloc, .{ options, allocator });
-        }
+        /// Initialize the queue, will reference one of:
+        /// - initAlloc(options, Options, allocator: Allocator) !Self
+        /// - initBuffer(buf: []T, options: Options) Self
+        /// - initComptime(comptime options: Options) Self
+        pub const init = switch (buffer_type) {
+            .Alloc => initAlloc,
+            .Buffer => initBuffer,
+            .Comptime => initComptime,
+        };
 
         /// Initialize the queue, allocating memory on the heap.
         /// After use; release memory by calling 'deinit'.
         pub fn initAlloc(options: Options, allocator: Allocator) !Self {
-            const _options = .{ .init_capacity = options.init_capacity, .growable = options.growable };
-            const body = try @call(.always_inline, DoubleEndedQueue(T).initAlloc, .{ _options, allocator });
-            return .{ .body = body };
+            const _options: Dequ.Options = .{
+                .init_capacity = options.init_capacity,
+                .growable = options.growable,
+                .shrinkable = options.shrinkable,
+            };
+            return .{ .body = try Dequ.init(_options, allocator) };
         }
 
         /// Initialize the queue to work with static space in buffer `buf`.
         /// Won't be able to grow, `options.growable` and `options.init_capacity` is ignored.
         pub fn initBuffer(buf: []T, options: Options) Self {
-            const _options = .{ .init_capacity = options.init_capacity, .growable = options.growable };
-            const body = @call(.always_inline, DoubleEndedQueue(T).initBuffer, .{ buf, _options });
-            return .{ .body = body };
+            const _options: Dequ.Options = .{
+                .init_capacity = options.init_capacity,
+                .growable = options.growable,
+                .shrinkable = options.shrinkable,
+            };
+            return .{ .body = Dequ.init(buf, _options) };
         }
 
         /// Initialize the queue, allocating memory in read-only data or
         /// compiler's address space if not referenced runtime.
         pub fn initComptime(comptime options: Options) Self {
-            const _options = .{ .init_capacity = options.init_capacity, .growable = options.growable };
-            const body = @call(.always_inline, DoubleEndedQueue(T).initComptime, .{_options});
-            return .{ .body = body };
+            const _options: Dequ.Options = .{
+                .init_capacity = options.init_capacity,
+                .growable = options.growable,
+                .shrinkable = options.shrinkable,
+            };
+            return .{ .body = Dequ.init(_options) };
         }
 
         /// Release allocated memory, cleanup routine for 'init' and 'initAlloc'.
         pub fn deinit(self: *Self) void {
-            self.body.deinit();
+            self.deque.deinit();
         }
 
         /// Store an `item` last in the queue.
         pub fn push(self: *Self, item: T) !void {
-            return self.body.push_last(item);
+            return self.deque.push_last(item);
         }
 
         /// Get an item first in the queue, free its memory.
         pub fn pop(self: *Self) !T {
-            return self.body.pop_first();
+            return self.deque.pop_first();
         }
 
         /// Get an item first in the queue.
         pub fn peek(self: *Self) ?T {
-            return self.body.peek_first();
+            return self.deque.peek_first();
         }
 
         /// Check if the queue is empty.
         pub inline fn isEmpty(self: *Self) bool {
-            return self.body.isEmpty();
+            return self.deque.isEmpty();
         }
     };
 }
@@ -100,10 +117,10 @@ pub fn FifoQueue(comptime T: type) type {
 const expectEqual = std.testing.expectEqual;
 const expectError = std.testing.expectError;
 
-test "static FifoQueue" {
+test "Static FifoQueue" {
     // setup
     var buffer: [2]u8 = undefined;
-    var fifo = FifoQueue(u8).initBuffer(&buffer, .{});
+    var fifo = FifoQueue(u8, .Buffer).initBuffer(&buffer, .{});
 
     // test general
     try fifo.push(1);
@@ -115,10 +132,14 @@ test "static FifoQueue" {
     try expectEqual(true, fifo.isEmpty());
 }
 
-test "dynamic FifoQueue" {
+test "Dynamic FifoQueue" {
     // setup
     const allocator = std.testing.allocator;
-    var fifo = try FifoQueue(u8).init(.{ .init_capacity = 2, .growable = true }, allocator);
+    var fifo = try FifoQueue(u8, .Alloc).init(.{
+        .init_capacity = 2,
+        .growable = true,
+        .shrinkable = true,
+    }, allocator);
     defer fifo.deinit();
 
     // test empty state

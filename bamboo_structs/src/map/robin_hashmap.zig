@@ -90,7 +90,7 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
 
         // struct fields
         kvs: []KV,
-        kvs_type: enum { Alloc, Buffer, Comptime },
+        comptime kvs_type: enum { Alloc, Buffer, Comptime } = .Alloc, // * for branch pruning in 'grow'
         size: usize = 0,
         size_grow_threshold: ?usize,
         options: Options,
@@ -122,7 +122,7 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
         }
 
         /// Initialize the map to work with buffer `buf` (* pass undefined memory).
-        /// Won't be able to grow, `options.growable` is ignored.
+        /// Currently `options` will be ignored.
         pub fn initBuffer(buf: []KV, options: Options) Self {
             if (buf.len) panic("Can't initialize with zero size.", .{});
             comptime verifyContext(options.ctx);
