@@ -6,6 +6,7 @@ const shared = @import("./shared.zig");
 // exports -->
 
 pub const RobinHashMap = robin.RobinHashMap;
+pub const Error = shared.Error;
 
 // testing -->
 

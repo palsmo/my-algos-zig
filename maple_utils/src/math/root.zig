@@ -5,6 +5,7 @@ const shared = @import("./shared.zig");
 
 pub const Error = shared.Error;
 pub const assertPowOf2 = misc.assertPowOf2;
+pub const fastMod = misc.fastMod;
 pub const getPow10 = misc.getPow10;
 pub const isPowOf2 = misc.isPowOf2;
 pub const mulPercent = misc.mulPercent;

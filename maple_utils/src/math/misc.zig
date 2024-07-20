@@ -1,4 +1,4 @@
-//! Author: Palsmo
+//! Author: palsmo
 
 const std = @import("std");
 const math = std.math;
@@ -12,16 +12,22 @@ const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const panic = std.debug.panic;
 
-/// Assert that `int` is a power of two.
+/// Assert that `int` is some power of two.
 pub inline fn assertPowOf2(int: anytype) void {
+    comptime assertType(@TypeOf(int), .{ .Int, .ComptimeInt });
     if (isPowOf2(int)) return;
     panic("Value is not a power of two, found '{}'", .{int});
 }
 
-/// Check if `int` is a power of two.
-/// Utilizing the fact that powers of 2 only has one bit set.
+/// Fast `a` modulus `b`, but `b` has to be a power of two.
+pub inline fn fastMod(comptime T: type, a: T, b: T) void {
+    return a & (b - 1);
+}
+
+/// Check if `int` is some power of two.
 pub inline fn isPowOf2(int: anytype) bool {
     comptime assertType(@TypeOf(int), .{ .Int, .ComptimeInt });
+    // * powers of 2 only has one bit set
     return int != 0 and (int & (int - 1)) == 0;
 }
 

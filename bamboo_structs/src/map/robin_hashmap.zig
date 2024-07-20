@@ -10,30 +10,53 @@ const shared = @import("./shared.zig");
 
 const Allocator = std.mem.Allocator;
 const Error = shared.Error;
+const assertAndMsg = maple.debug.assertAndMsg;
+const assertPowOf2 = maple.math.assertPowOf2;
+const fastMod = maple.math.fastMod;
 const mulPercent = maple.math.mulPercent;
 const panic = std.debug.panic;
 const wrapDecrement = maple.math.wrapDecrement;
 const wrapIncrement = maple.math.wrapIncrement;
 
-/// Store key-value pairs of type `K`-key `V`-value.
+/// A hashed map for key-value pairs of type `K` and `V`.
 /// Useful for general purpose key-value storage.
-/// Properties:
-/// Uses 'Robin Hood Hashing' with backward shift deletion (faster than tombstone).
-/// Low memory, good cache locality, low variance in lookup times.
+/// Provides efficient insertion, removal and lookup operations for keys.
 ///
-/// complexity |     best     |   average    |    worst     |        factor
-/// ---------- | ------------ | ------------ | ------------ | ---------------------
-/// memory     | O(1)         | O(1)         | O(n)         | grow routine
-/// space      | O(n)         | O(n)         | O(2n)        | grow routine
-/// insertion  | O(1)         | O(1)         | O(n)         | grow routine
-/// deletion   | O(1)         | O(1)         | O(n)         | shrink routine
-/// lookup     | O(1)         | O(1)         | O(n log n)   | space saturation
-/// -------------------------------------------------------------------------------
+/// Reference to 'self.kvs' may become invalidated after grow/shrink routine,
+/// use 'self.isValidRef' to verify.
+///
+/// Properties:
+/// Uses 'Robin Hood Hashing' with backward shift deletion (generally faster than tombstone).
+///
+///  complexity |     best     |   average    |    worst     |        factor
+/// ------------|--------------|--------------| -------------|----------------------
+/// memory idle | O(n)         | O(n)         | O(4n)        | grow/shrink routine
+/// memory work | O(1)         | O(1)         | O(2)         | grow/shrink routine
+/// insertion   | O(1)         | O(1)         | O(n)         | grow routine
+/// deletion    | O(1)         | O(1)         | O(n)         | shrink routine
+/// lookup      | O(1)         | O(1)         | O(n log n)   | space saturation
+/// ------------|--------------|--------------|--------------|----------------------
+///  cache loc  | decent       | decent       | decent       | hash-spread
+/// --------------------------------------------------------------------------------
 pub fn RobinHashMap(comptime K: type, comptime V: type) type {
     return struct {
-        const Self = @This();
+        pub const Options = struct {
+            // initial capacity of the map, asserted to be a power of 2 (efficiency reasons)
+            init_capacity: u32 = 100,
+            // whether the map can grow beyond `init_capacity`
+            growable: bool = true,
+            // grow map at this load (75% capacity)
+            grow_threshold: ?f64 = 0.75,
+            // whether the map can shrink when grown past `init_capacity`,
+            // will half when size used falls below 1/4 of capacity
+            shrinkable: bool = true,
+            // namespace containing:
+            // eql: fn(a: K, b: K) bool
+            // hash: fn(data: K) u64
+            comptime ctx: type = default_ctx,
+        };
 
-        /// Context namespace that can handle most types.
+        /// Context namespace used by default that can handle most types.
         const default_ctx = struct {
             inline fn eql(a: K, b: K) bool {
                 return maple.mem.cmp(a, .eq, b);
@@ -44,19 +67,7 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
             }
         };
 
-        pub const Options = struct {
-            // initial capacity of the map
-            init_capacity: u32 = 100,
-            // whether the map can grow beyond `init_capacity`
-            growable: bool = true,
-            // grow map at this load (75% capacity)
-            grow_threshold: f64 = 0.75,
-            // namespace containing:
-            // eql: fn(a: K, b: K) bool
-            // hash: fn(data: K) u64
-            comptime ctx: type = default_ctx,
-        };
-
+        /// Key-Value (slot) memory layout in map.
         pub const KV = packed struct {
             key: K = undefined,
             value: V = undefined,
@@ -88,96 +99,130 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
             }
         };
 
-        // struct fields
-        kvs: []KV,
-        comptime kvs_type: enum { Alloc, Buffer, Comptime } = .Alloc, // * for branch pruning in 'grow'
-        size: usize = 0,
-        size_grow_threshold: ?usize,
-        options: Options,
-        allocator: ?Allocator,
+        /// Initialize the queue, allocating memory on the heap.
+        /// User should release memory after use by calling 'deinit'.
+        /// Function is valid only during _runtime_.
+        pub fn initAlloc(options: Options, allocator: Allocator) !RobinHashMapGeneric(K, V, .Alloc) {
+            assertAndMsg(options.init_capacity > 0, "Can't initialize with zero size.", .{});
+            assertPowOf2(options.init_capacity);
 
-        /// Initialize the map, configure with `options`.
-        /// After use; release memory by calling 'deinit'.
-        pub fn init(options: Options, allocator: Allocator) !Self {
-            return @call(.always_inline, initAlloc, .{ options, allocator });
-        }
-
-        /// Initialize the map, allocating memory on the heap.
-        /// After use; release memory by calling 'deinit'.
-        pub fn initAlloc(options: Options, allocator: Allocator) !Self {
-            if (options.init_capacity == 0) panic("Can't initialize with zero size.", .{});
             comptime verifyContext(options.ctx);
 
-            // * initialize all slots as default
-            const kvs = try allocator.alloc(KV, options.init_capacity);
-            for (kvs) |*kv| kv.* = .{};
-
             return .{
-                .kvs = kvs,
-                .kvs_type = .Alloc,
+                .kvs = b: {
+                    const buf = try allocator.?.alloc(KV, options.init_capacity);
+                    for (buf) |*slot| slot.* = .{}; // * init all slots as default
+                    break :b buf;
+                },
                 .size_grow_threshold = mulPercent(options.grow_threshold, options.init_capacity),
                 .options = options,
                 .allocator = allocator,
             };
         }
 
-        /// Initialize the map to work with buffer `buf` (* pass undefined memory).
-        /// Currently `options` will be ignored.
-        pub fn initBuffer(buf: []KV, options: Options) Self {
-            if (buf.len) panic("Can't initialize with zero size.", .{});
+        /// Initialize the queue to work with static space in buffer `buf`.
+        /// Fields in `options` that will be ignored are; init_capacity, growable, grow_threshold, shrinkable.
+        /// Function is valid during _comptime_ or _runtime_.
+        pub fn initBuffer(buf: []KV, options: Options) RobinHashMapGeneric(K, V, .Buffer) {
+            assertAndMsg(buf.len > 0, "Can't initialize with zero size.", .{});
+            assertPowOf2(buf.len);
+
             comptime verifyContext(options.ctx);
 
-            // * initialize all slots as default
-            for (buf) |*kv| kv.* = .{};
-
             return .{
-                .kvs = buf,
-                .kvs_type = .Buffer,
+                .kvs = b: {
+                    for (buf) |*slot| slot.* = .{};
+                    break :b buf;
+                },
                 .size_grow_threshold = null,
                 .options = options{
                     .init_capacity = buf.len,
                     .growable = false,
-                    .grow_threshold = std.math.nan(f64),
+                    .grow_threshold = null,
+                    .shrinkable = false,
                 },
                 .allocator = null,
             };
         }
 
-        /// Initialize the map, allocating memory in read-only data or
+        /// Initialize the queue, allocating memory in .rodata or
         /// compiler's address space if not referenced runtime.
-        pub fn initComptime(comptime options: Options) !Self {
-            if (!@inComptime()) panic("Invalid at runtime.", .{});
-            if (options.init_capacity == 0) panic("Can't initialize with zero size.", .{});
-            verifyContext(options.ctx);
+        /// Function is valid during _comptime_.
+        pub fn initComptime(comptime options: Options) RobinHashMapGeneric(K, V, .Comptime) {
+            assertAndMsg(@inComptime(), "Invalid at runtime.", .{});
+            assertAndMsg(options.init_capacity > 0, "Can't initialize with zero size.", .{});
+            assertPowOf2(options.init_capacity);
 
-            // * initialize all slots as default
-            const kvs = blk: { // compiler promotes, not 'free-after-use'
-                var buf = [_]KV{.{}} ** options.init_capacity;
-                break :blk &buf;
-            };
+            comptime verifyContext(options.ctx);
 
             return .{
-                .kvs = kvs,
-                .kvs_type = .Comptime,
+                .kvs = undefined,
                 .size_grow_threshold = mulPercent(options.grow_threshold, options.init_capacity),
                 .options = options,
                 .allocator = null,
             };
         }
 
-        /// Release allocated memory, cleanup routine for 'init'.
+        /// Verify properties of `ctx`.
+        fn verifyContext(comptime ctx: type) void {
+            if (@typeInfo(ctx) != .Struct) {
+                @compileError("Expected struct, found '" ++ @typeName(ctx) ++ "'.");
+            }
+
+            const decls = .{
+                .{ "eql", .{ K, K }, bool },
+                .{ "hash", .{K}, u64 },
+            };
+
+            inline for (decls) |decl| {
+                const name = decl[0];
+                const in_types = decl[1];
+                const out_type = decl[2];
+                if (!@hasDecl(ctx, name)) {
+                    @compileError("Expected declaration by name '" ++ name ++ "' in `ctx` argument.");
+                }
+                const fn_type = @field(ctx, name);
+                maple.typ.assertFn(fn_type, in_types, out_type);
+            }
+        }
+    };
+}
+
+/// Digest of some 'RobinHashMap' init-function.
+/// Depending on `buffer_type` certain operations may be pruned or optimized.
+pub fn RobinHashMapGeneric(comptime K: type, comptime V: type, comptime buffer_type: enum { Alloc, Buffer, Comptime }) type {
+    return struct {
+        const Self = @This();
+
+        const Robin = RobinHashMap(K, V);
+
+        // struct fields
+        kvs: Robin.KV,
+        size: usize = 0,
+        size_grow_threshold: ?usize,
+        options: Robin.Options,
+        allocator: ?Allocator,
+
+        /// Release allocated memory, cleanup routine for 'initAlloc'.
         pub fn deinit(self: *Self) void {
-            if (self.allocator) |ally| {
-                ally.free(self.stack);
-            } else {
-                panic("Can't deallocate with `null` allocator.", .{});
+            switch (buffer_type) {
+                .Alloc => self.allocator.?.free(self.buffer),
+                .Buffer, .Comptime => panic("Can't deallocate with nonexistent allocator.", .{}),
             }
         }
 
-        /// Store a `key` - `value` pair.
+        /// Store a `key` - `value` pair in the map.
         pub fn put(self: *Self, key: K, value: V) !void {
-            if (self.size >= self.size_grow_threshold) {
-                if (self.options.growable) try self.grow() else return Error.CapacityReached;
+            // grow?
+            if (self.size < self.buffer.len) {} else {
+                switch (buffer_type) {
+                    .Alloc => if (self.options.growable) try self.grow() else return Error.Overflow,
+                    .Buffer => return Error.Overflow,
+                    .Comptime => {
+                        assertAndMsg(@inComptime(), "Invalid at runtime.", .{});
+                        if (self.options.growable) try self.grow() else return Error.Overflow;
+                    },
+                }
             }
 
             const hash = self.options.ctx.hash(key);
@@ -219,12 +264,13 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
             }
         }
 
-        /// Remove a `key` - value pair, if successful returns true.
+        /// Remove a `key` - value pair from the map.
+        /// Returns true (success) or false (fail).
         pub fn remove(self: *Self, key: K) bool {
-            if (self.size == 0) return true;
+            if (self.size != 0) {} else return true;
 
             const hash = self.options.ctx.hash(key);
-            var index = hash % self.kvs.len;
+            var index = fastMod(hash, self.kvs.len);
             var probe_dist: u8 = 0;
 
             while (probe_dist <= self.kvs[index].getProbeDistance()) {
@@ -267,9 +313,11 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
             }
         }
 
-        /// Get a copy of a value with `key`, returns 'null' if non-existent.
-        pub fn get(self: *Self, key: K) ?V {
-            if (self.size == 0) return null;
+        /// Get from `key` the associated value from the map.
+        /// Returns _null_ only if there's no value.
+        /// This function may throw error but chances are miniscule.
+        pub fn get(self: *Self, key: K) !?V {
+            if (self.size != 0) {} else return null;
 
             const hash = self.options.ctx.hash(key);
             var index = hash % self.kvs.len;
@@ -292,9 +340,10 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
             return null;
         }
 
-        /// Check if map contains the `key`.
+        /// Check if `key` is a member of the map.
+        /// Returns _true_ (found) or _false_ (not found).
         pub fn contains(self: *Self, key: K) bool {
-            if (self.size == 0) return false;
+            if (self.size != 0) {} else return false;
 
             const hash = self.options.ctx.hash(key);
             var index = hash % self.kvs.len;
@@ -316,53 +365,55 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
             // `key` was not found
             return false;
         }
-
-        /// Copy over current key-value pairs into new buffer of twice the size.
-        fn grow(self: *Self) void {
-            // allocate buffer with more capacity
-            const new_capacity = self.kvs.len * 2;
-            const new_buffer = switch (self.typ) {
-                .Alloc => try self.allocator.?.alloc(KV, new_capacity),
-                .Buffer => unreachable,
-                .Comptime => blk: { // compiler promotes, not 'free-after-use'
-                    if (!@inComptime()) panic("Can't grow comptime buffer at runtime.", .{});
-                    var buf: [new_capacity]KV = undefined;
-                    break :blk &buf;
-                },
-            };
-
-            const old_mem = self.kvs[0..self.size];
-            const new_mem = new_buffer[0..self.size];
-            @memcpy(new_mem, old_mem);
-            for (new_mem[self.size..]) |*slot| slot.* = KV{}; // initialize slack slots as default
-
-            if (self.kvs_type == .Alloc) self.allocator.?.free(self.kvs);
-
-            self.kvs = new_buffer;
-            self.size_grow_threshold = mulPercent(self.options.grow_threshold, new_capacity);
-        }
-
-        /// Verify properties of `Ctx`.
-        fn verifyContext(comptime Ctx: type) void {
-            if (@typeInfo(Ctx) != .Struct) {
-                @compileError("Expected struct, found '" ++ @typeName(Ctx) ++ "'.");
-            }
-
-            const decls = .{
-                .{ "eql", .{ K, K }, bool },
-                .{ "hash", .{K}, u64 },
-            };
-
-            inline for (decls) |decl| {
-                const name = decl[0];
-                const in_types = decl[1];
-                const out_type = decl[2];
-                if (!@hasDecl(Ctx, name)) {
-                    @compileError("Expected declaration by name '" ++ name ++ "' in `Ctx` argument.");
-                }
-                const fn_type = @field(Ctx, name);
-                maple.typ.assertFn(fn_type, in_types, out_type);
-            }
-        }
     };
 }
+//
+//        /// Copy over current key-value pairs into new buffer of twice the size.
+//        fn grow(self: *Self) void {
+//            // allocate buffer with more capacity
+//            const new_capacity = self.kvs.len * 2;
+//            const new_buffer = switch (self.typ) {
+//                .Alloc => try self.allocator.?.alloc(KV, new_capacity),
+//                .Buffer => unreachable,
+//                .Comptime => blk: { // compiler promotes, not 'free-after-use'
+//                    if (!@inComptime()) panic("Can't grow comptime buffer at runtime.", .{});
+//                    var buf: [new_capacity]KV = undefined;
+//                    break :blk &buf;
+//                },
+//            };
+//
+//            const old_mem = self.kvs[0..self.size];
+//            const new_mem = new_buffer[0..self.size];
+//            @memcpy(new_mem, old_mem);
+//            for (new_mem[self.size..]) |*slot| slot.* = KV{}; // initialize slack slots as default
+//
+//            if (self.kvs_type == .Alloc) self.allocator.?.free(self.kvs);
+//
+//            self.kvs = new_buffer;
+//            self.size_grow_threshold = mulPercent(self.options.grow_threshold, new_capacity);
+//        }
+//
+//        /// Verify properties of `Ctx`.
+//        fn verifyContext(comptime Ctx: type) void {
+//            if (@typeInfo(Ctx) != .Struct) {
+//                @compileError("Expected struct, found '" ++ @typeName(Ctx) ++ "'.");
+//            }
+//
+//            const decls = .{
+//                .{ "eql", .{ K, K }, bool },
+//                .{ "hash", .{K}, u64 },
+//            };
+//
+//            inline for (decls) |decl| {
+//                const name = decl[0];
+//                const in_types = decl[1];
+//                const out_type = decl[2];
+//                if (!@hasDecl(Ctx, name)) {
+//                    @compileError("Expected declaration by name '" ++ name ++ "' in `Ctx` argument.");
+//                }
+//                const fn_type = @field(Ctx, name);
+//                maple.typ.assertFn(fn_type, in_types, out_type);
+//            }
+//        }
+//    };
+//}
