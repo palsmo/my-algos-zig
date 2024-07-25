@@ -14,7 +14,7 @@ const panic = std.debug.panic;
 
 /// Assert that `int` is some power of two.
 pub inline fn assertPowOf2(int: anytype) void {
-    comptime assertType(@TypeOf(int), .{ .Int, .ComptimeInt });
+    comptime assertType(@TypeOf(int), .{ .Int, .ComptimeInt }, "", .{});
     if (isPowOf2(int)) return;
     panic("Value is not a power of two, found '{}'", .{int});
 }
@@ -26,7 +26,7 @@ pub inline fn fastMod(comptime T: type, a: T, b: T) void {
 
 /// Check if `int` is some power of two.
 pub inline fn isPowOf2(int: anytype) bool {
-    comptime assertType(@TypeOf(int), .{ .Int, .ComptimeInt });
+    comptime assertType(@TypeOf(int), .{ .Int, .ComptimeInt }, "", .{});
     // * powers of 2 only has one bit set
     return int != 0 and (int & (int - 1)) == 0;
 }
@@ -80,10 +80,10 @@ test power_of_10_table_int {
 /// Multiply some percentage `percentage_float` with some number `n`.
 /// Useful for calculating tresholds for (u)sizes and similar.
 /// Adjust precision of `percent_float` by number of decimal places with `options.precision`.
-/// Asserts that `percent_float` is within range [0.0, 1.0] (* avoids need to handle error).
+/// Asserts that `percent_float` is within range [0.0, 1.0] (* overflow error gets avoided).
 pub fn mulPercent(percent_float: f64, n: usize, options: struct { precision: u4 = 2 }) usize {
     // checking `percent_float`
-    if (!math.isFinite(percent_float) or percent_float < 0 or percent_float > 1.0) {
+    if (!math.isFinite(percent_float) or percent_float < 0.0 or percent_float > 1.0) {
         panic("Invalid percentage, found '{d}'", .{percent_float});
     }
 
@@ -127,7 +127,7 @@ test mulPercent {
 
 /// Returns an incremented `num`, wrapping according to [`min`, `max`).
 pub inline fn wrapIncrement(comptime T: type, num: T, min: T, max: T) T {
-    comptime assertType(T, .{ .Int, .Float, .ComptimeInt, .ComptimeFloat });
+    comptime assertType(T, .{ .Int, .Float, .ComptimeInt, .ComptimeFloat }, "", .{});
     const new_num = num + 1;
     return if (new_num < max) new_num else min;
 }
@@ -141,7 +141,7 @@ test wrapIncrement {
 
 /// Returns a decremented `value`, wrapping according to [`min`, `max`).
 pub inline fn wrapDecrement(comptime T: type, value: T, min: T, max: T) T {
-    comptime assertType(T, .{ .Int, .Float, .ComptimeInt, .ComptimeFloat });
+    comptime assertType(T, .{ .Int, .Float, .ComptimeInt, .ComptimeFloat }, "", .{});
     return if (min < value) value - 1 else max - 1;
 }
 

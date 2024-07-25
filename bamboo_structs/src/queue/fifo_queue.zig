@@ -1,4 +1,5 @@
 //! Author: palsmo
+//! Status: Done
 //! Read: https://en.wikipedia.org/wiki/FIFO_(computing_and_electronics)
 
 const std = @import("std");
@@ -98,22 +99,38 @@ pub fn FifoQueueGeneric(comptime T: type, comptime buffer_type: enum { Alloc, Bu
             self.deque.deinit();
         }
 
+        pub inline fn pushInline(self: *Self, item: T) !void {
+            try self.deque.pushLastInline(self, item);
+        }
+
         /// Store an `item` first in the queue.
         /// This function throws error when adding at max capacity with 'self.options.growable' set to false.
         pub inline fn push(self: *Self, item: T) !void {
-            return self.deque.push_last(item);
+            try self.deque.pushLast(item);
+        }
+
+        pub inline fn popInline(self: *Self) !T {
+            return try self.deque.popFirstInline(self);
         }
 
         /// Get the first item in the queue, free its memory.
         /// This function throws error when trying to release from empty queue.
         pub inline fn pop(self: *Self) !T {
-            return self.deque.pop_first();
+            return try self.deque.popFirst();
+        }
+
+        pub inline fn peekInline(self: *Self) ?T {
+            return self.deque.peekFirstInline();
         }
 
         /// Get the first item in the queue.
         /// Returns _null_ only if there's no value.
         pub inline fn peek(self: *Self) ?T {
-            return self.deque.peek_first();
+            return self.deque.peekFirst();
+        }
+
+        pub inline fn peekIndexInline(self: *Self, index: usize) ?T {
+            return self.deque.peekIndexInline(self, index);
         }
 
         /// Get an item at index `index` in the queue.
@@ -135,7 +152,7 @@ pub fn FifoQueueGeneric(comptime T: type, comptime buffer_type: enum { Alloc, Bu
         /// Reset queue to its empty state.
         /// This function may throw error as part of the allocation process.
         pub inline fn reset(self: *Self) !void {
-            return self.deque.reset();
+            try self.deque.reset();
         }
 
         /// Check if the queue is empty.

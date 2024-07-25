@@ -1,4 +1,5 @@
 //! Author: palsmo
+//! Status: In Progress
 //! Read: https://en.wikipedia.org/wiki/Hash_table
 //! Inspiration: https://codecapsule.com/2013/11/17/robin-hood-hashing-backward-shift-deletion/
 
@@ -104,6 +105,7 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
         /// Function is valid only during _runtime_.
         pub fn initAlloc(options: Options, allocator: Allocator) !RobinHashMapGeneric(K, V, .Alloc) {
             assertAndMsg(options.init_capacity > 0, "Can't initialize with zero size.", .{});
+            assertAndMsg(options.grow_threshold >= 0.0 and options.grow_threshold <= 1.0, "Growth-threshold has to be between 0.0 and 1.0", .{});
             assertPowOf2(options.init_capacity);
 
             comptime verifyContext(options.ctx);
@@ -125,6 +127,7 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
         /// Function is valid during _comptime_ or _runtime_.
         pub fn initBuffer(buf: []KV, options: Options) RobinHashMapGeneric(K, V, .Buffer) {
             assertAndMsg(buf.len > 0, "Can't initialize with zero size.", .{});
+            assertAndMsg(options.grow_threshold >= 0.0 and options.grow_threshold <= 1.0, "Growth-threshold has to be between 0.0 and 1.0", .{});
             assertPowOf2(buf.len);
 
             comptime verifyContext(options.ctx);
@@ -151,6 +154,7 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
         pub fn initComptime(comptime options: Options) RobinHashMapGeneric(K, V, .Comptime) {
             assertAndMsg(@inComptime(), "Invalid at runtime.", .{});
             assertAndMsg(options.init_capacity > 0, "Can't initialize with zero size.", .{});
+            assertAndMsg(options.grow_threshold >= 0.0 and options.grow_threshold <= 1.0, "Growth-threshold has to be between 0.0 and 1.0", .{});
             assertPowOf2(options.init_capacity);
 
             comptime verifyContext(options.ctx);
@@ -161,29 +165,6 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
                 .options = options,
                 .allocator = null,
             };
-        }
-
-        /// Verify properties of `ctx`.
-        fn verifyContext(comptime ctx: type) void {
-            if (@typeInfo(ctx) != .Struct) {
-                @compileError("Expected struct, found '" ++ @typeName(ctx) ++ "'.");
-            }
-
-            const decls = .{
-                .{ "eql", .{ K, K }, bool },
-                .{ "hash", .{K}, u64 },
-            };
-
-            inline for (decls) |decl| {
-                const name = decl[0];
-                const in_types = decl[1];
-                const out_type = decl[2];
-                if (!@hasDecl(ctx, name)) {
-                    @compileError("Expected declaration by name '" ++ name ++ "' in `ctx` argument.");
-                }
-                const fn_type = @field(ctx, name);
-                maple.typ.assertFn(fn_type, in_types, out_type);
-            }
         }
     };
 }
@@ -365,55 +346,53 @@ pub fn RobinHashMapGeneric(comptime K: type, comptime V: type, comptime buffer_t
             // `key` was not found
             return false;
         }
+        /// Copy over current key-value pairs into new buffer of twice the size.
+        /// This function may throw error as part of the allocation process.
+        fn grow(self: *Self) void {
+            // allocate new buffer with more capacity
+            const new_capacity = self.kvs.len * 2;
+            const new_buffer = switch (self.typ) {
+                .Alloc => try self.allocator.?.alloc(Robin.KV, new_capacity),
+                .Buffer => unreachable,
+                .Comptime => blk: { // compiler promotes, not 'free-after-use'
+                    assertAndMsg(@inComptime(), "Can't grow comptime buffer at runtime.", .{});
+                    var buf: [new_capacity]Robin.KV = undefined;
+                    break :blk &buf;
+                },
+            };
+
+            const old_mem = self.kvs[0..self.size];
+            const new_mem = new_buffer[0..self.size];
+            @memcpy(new_mem, old_mem);
+            for (new_mem[self.size..]) |*slot| slot.* = .{}; // initialize slack slots as default
+
+            if (buffer_type == .Alloc) self.allocator.?.free(self.kvs);
+
+            self.kvs = new_buffer;
+            self.size_grow_threshold = mulPercent(self.options.grow_threshold, new_capacity);
+        }
+
+        /// Verify properties of `ctx`.
+        fn verifyContext(comptime ctx: type) void {
+            if (@typeInfo(ctx) != .Struct) {
+                @compileError("Expected struct, found '" ++ @typeName(ctx) ++ "'.");
+            }
+
+            const decls = .{
+                .{ "eql", .{ K, K }, bool },
+                .{ "hash", .{K}, u64 },
+            };
+
+            inline for (decls) |decl| {
+                const name = decl[0];
+                const in_types = decl[1];
+                const out_type = decl[2];
+                if (!@hasDecl(ctx, name)) {
+                    @compileError("Expected declaration by name '" ++ name ++ "' in `ctx` argument.");
+                }
+                const fn_type = @field(ctx, name);
+                maple.typ.assertFn(fn_type, in_types, out_type);
+            }
+        }
     };
 }
-//
-//        /// Copy over current key-value pairs into new buffer of twice the size.
-//        fn grow(self: *Self) void {
-//            // allocate buffer with more capacity
-//            const new_capacity = self.kvs.len * 2;
-//            const new_buffer = switch (self.typ) {
-//                .Alloc => try self.allocator.?.alloc(KV, new_capacity),
-//                .Buffer => unreachable,
-//                .Comptime => blk: { // compiler promotes, not 'free-after-use'
-//                    if (!@inComptime()) panic("Can't grow comptime buffer at runtime.", .{});
-//                    var buf: [new_capacity]KV = undefined;
-//                    break :blk &buf;
-//                },
-//            };
-//
-//            const old_mem = self.kvs[0..self.size];
-//            const new_mem = new_buffer[0..self.size];
-//            @memcpy(new_mem, old_mem);
-//            for (new_mem[self.size..]) |*slot| slot.* = KV{}; // initialize slack slots as default
-//
-//            if (self.kvs_type == .Alloc) self.allocator.?.free(self.kvs);
-//
-//            self.kvs = new_buffer;
-//            self.size_grow_threshold = mulPercent(self.options.grow_threshold, new_capacity);
-//        }
-//
-//        /// Verify properties of `Ctx`.
-//        fn verifyContext(comptime Ctx: type) void {
-//            if (@typeInfo(Ctx) != .Struct) {
-//                @compileError("Expected struct, found '" ++ @typeName(Ctx) ++ "'.");
-//            }
-//
-//            const decls = .{
-//                .{ "eql", .{ K, K }, bool },
-//                .{ "hash", .{K}, u64 },
-//            };
-//
-//            inline for (decls) |decl| {
-//                const name = decl[0];
-//                const in_types = decl[1];
-//                const out_type = decl[2];
-//                if (!@hasDecl(Ctx, name)) {
-//                    @compileError("Expected declaration by name '" ++ name ++ "' in `Ctx` argument.");
-//                }
-//                const fn_type = @field(Ctx, name);
-//                maple.typ.assertFn(fn_type, in_types, out_type);
-//            }
-//        }
-//    };
-//}

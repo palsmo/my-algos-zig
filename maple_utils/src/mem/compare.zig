@@ -22,47 +22,35 @@ test cmp {
     const a = 1;
     const b = 2;
 
-    { // test '<'
-        const op = .lt;
-        try expect(cmp(a, op, b));
-        try expect(cmp(b, op, a) == false);
-        try expect(cmp(a, op, a) == false);
-    }
+    // test '<'
+    try expect(cmp(a, .lt, b));
+    try expect(cmp(b, .lt, a) == false);
+    try expect(cmp(a, .lt, a) == false);
 
-    { // test '>'
-        const op = .gt;
-        try expect(cmp(a, op, b) == false);
-        try expect(cmp(b, op, a));
-        try expect(cmp(a, op, a) == false);
-    }
+    // test '>'
+    try expect(cmp(a, .gt, b) == false);
+    try expect(cmp(b, .gt, a));
+    try expect(cmp(a, .gt, a) == false);
 
-    { // test '<='
-        const op = .lte;
-        try expect(cmp(a, op, b));
-        try expect(cmp(b, op, a) == false);
-        try expect(cmp(a, op, a));
-    }
+    // test '<='
+    try expect(cmp(a, .lte, b));
+    try expect(cmp(b, .lte, a) == false);
+    try expect(cmp(a, .lte, a));
 
-    { // test '>='
-        const op = .gte;
-        try expect(cmp(a, op, b) == false);
-        try expect(cmp(b, op, a));
-        try expect(cmp(a, op, a));
-    }
+    // test '>='
+    try expect(cmp(a, .gte, b) == false);
+    try expect(cmp(b, .gte, a));
+    try expect(cmp(a, .gte, a));
 
-    { // test '=='
-        const op = .eq;
-        try expect(cmp(a, op, b) == false);
-        try expect(cmp(b, op, a) == false);
-        try expect(cmp(a, op, a));
-    }
+    // test '=='
+    try expect(cmp(a, .eq, b) == false);
+    try expect(cmp(b, .eq, a) == false);
+    try expect(cmp(a, .eq, a));
 
-    { // test '!='
-        const op = .neq;
-        try expect(cmp(a, op, b));
-        try expect(cmp(b, op, a));
-        try expect(cmp(a, op, a) == false);
-    }
+    // test '!='
+    try expect(cmp(a, .neq, b));
+    try expect(cmp(b, .neq, a));
+    try expect(cmp(a, .neq, a) == false);
 }
 
 /// Order of `a` relative `b`, asserts same type, returns .lt, .gt or .eq
