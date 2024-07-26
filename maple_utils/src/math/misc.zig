@@ -1,43 +1,46 @@
 //! Author: palsmo
+//! Status: In Progress
 
 const std = @import("std");
 const math = std.math;
 
-const _typ = @import("../typ/root.zig");
-const shared = @import("./shared.zig");
+const maple_typ = @import("../typ/root.zig");
+const root_shared = @import("./shared.zig");
 
-const Error = shared.Error;
-const assertType = _typ.assertType;
-const expect = std.testing.expect;
+const Error = root_shared.Error;
+const assertType = maple_typ.assertType;
 const expectEqual = std.testing.expectEqual;
 const panic = std.debug.panic;
 
 /// Assert that `int` is some power of two.
 pub inline fn assertPowOf2(int: anytype) void {
-    comptime assertType(@TypeOf(int), .{ .Int, .ComptimeInt }, "", .{});
+    comptime assertType(@TypeOf(int), .{ .Int, .ComptimeInt }, @src().fn_name ++ ".int");
     if (isPowOf2(int)) return;
     panic("Value is not a power of two, found '{}'", .{int});
 }
 
 /// Fast `a` modulus `b`, but `b` has to be a power of two.
+/// Computation | very cheap
 pub inline fn fastMod(comptime T: type, a: T, b: T) void {
     return a & (b - 1);
 }
 
 /// Check if `int` is some power of two.
+/// Computation | very cheap
 pub inline fn isPowOf2(int: anytype) bool {
-    comptime assertType(@TypeOf(int), .{ .Int, .ComptimeInt }, "", .{});
+    comptime assertType(@TypeOf(int), .{ .Int, .ComptimeInt }, @src().fn_name ++ ".int");
     // * powers of 2 only has one bit set
     return int != 0 and (int & (int - 1)) == 0;
 }
 
 test isPowOf2 {
-    try expect(isPowOf2(2));
-    try expect(!isPowOf2(3));
+    try expectEqual(true, isPowOf2(2));
+    try expectEqual(false, isPowOf2(3));
 }
 
 /// Retrieve 10 to the power of `exp`.
 /// Interface for 'power\_of\_10\_table_...'.
+/// Computation | very cheap
 pub inline fn getPow10(exp: u4, comptime typ: enum { Float, Int }) if (typ == .Float) f64 else u64 {
     switch (typ) {
         .Float => return power_of_10_table_float[exp],
@@ -81,6 +84,7 @@ test power_of_10_table_int {
 /// Useful for calculating tresholds for (u)sizes and similar.
 /// Adjust precision of `percent_float` by number of decimal places with `options.precision`.
 /// Asserts that `percent_float` is within range [0.0, 1.0] (* overflow error gets avoided).
+/// Computation | cheap
 pub fn mulPercent(percent_float: f64, n: usize, options: struct { precision: u4 = 2 }) usize {
     // checking `percent_float`
     if (!math.isFinite(percent_float) or percent_float < 0.0 or percent_float > 1.0) {
@@ -127,7 +131,7 @@ test mulPercent {
 
 /// Returns an incremented `num`, wrapping according to [`min`, `max`).
 pub inline fn wrapIncrement(comptime T: type, num: T, min: T, max: T) T {
-    comptime assertType(T, .{ .Int, .Float, .ComptimeInt, .ComptimeFloat }, "", .{});
+    comptime assertType(T, .{ .Int, .Float, .ComptimeInt, .ComptimeFloat }, @src().fn_name ++ ".T");
     const new_num = num + 1;
     return if (new_num < max) new_num else min;
 }
@@ -141,7 +145,7 @@ test wrapIncrement {
 
 /// Returns a decremented `value`, wrapping according to [`min`, `max`).
 pub inline fn wrapDecrement(comptime T: type, value: T, min: T, max: T) T {
-    comptime assertType(T, .{ .Int, .Float, .ComptimeInt, .ComptimeFloat }, "", .{});
+    comptime assertType(T, .{ .Int, .Float, .ComptimeInt, .ComptimeFloat }, @src().fn_name ++ ".T");
     return if (min < value) value - 1 else max - 1;
 }
 

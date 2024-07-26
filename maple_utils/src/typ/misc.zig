@@ -1,76 +1,101 @@
+//! Author: Palsmo
+//! Status: In Progress
+
 const std = @import("std");
 
-const debug = @import("../debug/root.zig");
+const maple_debug = @import("../debug/root.zig");
 
-const assertAndMsg = debug.assertAndMsg;
+const assertComptime = maple_debug.assertComptime;
 const expectEqual = std.testing.expectEqual;
 const panic = std.debug.panic;
 
 /// Assert that type `T_fn` is of the form: 'fn (`args`...) `T_ret`'.
 /// `args` should be a tuple of expected parameter types (ordered).
-/// `T_ret` should be the expected return type.
+/// `T_ret` is the expected function return type.
 pub fn assertFn(comptime T_fn: type, comptime args: anytype, comptime T_ret: type) void {
+    assertComptime(@src().fn_name);
+
     // check `T_fn` type
-    const Fn_info = @typeInfo(T_fn);
-    if (Fn_info != .Fn) {
-        @compileError("Expected function-type for `F` argument, found '" ++ @typeName(T_fn) ++ "'.");
+    const T_fn_info = @typeInfo(T_fn);
+    switch (T_fn_info) {
+        .Fn => {},
+        else => {
+            @compileError(std.fmt.comptimePrint(
+                "Expected function type for `T_fn` argument, found '{s}'",
+                .{@typeName(T_fn)},
+            ));
+        },
     }
 
     // check `args` type
-    const I = @TypeOf(args);
-    const I_info = @typeInfo(I);
-    if (I_info != .Struct or !I_info.Struct.is_tuple) {
-        @compileError("Expected tuple for `in` argument, found '" ++ @typeName(I) ++ "'.");
+    const T_args = @TypeOf(args);
+    const T_args_info = @typeInfo(T_args);
+    switch (T_args_info) {
+        .Struct => {},
+        else => {
+            @compileError(std.fmt.comptimePrint(
+                "Expected tuple type for `args` argument, found '{s}'",
+                .{@typeName(T_args)},
+            ));
+        },
     }
 
     // check number of parameters
-    const params = Fn_info.Fn.params;
-    if (params.len != I_info.Struct.fields.len) {
+    const params = T_fn_info.Fn.params;
+    if (params.len != T_args_info.Struct.fields.len) {
         @compileError("Expected same parameter count, found " ++
             std.fmt.comptimePrint("{d}", .{params.len}) ++ "!=" ++
-            std.fmt.comptimePrint("{d}", .{I_info.Struct.fields.len}));
+            std.fmt.comptimePrint("{d}", .{T_args_info.Struct.fields.len}));
     }
 
     // check parameter types
     inline for (params, 0..) |param, i| {
-        const Expect = param.type.?;
-        const actual = args[i];
-        if (Expect != actual) {
-            @compileError("Type mismatch for parameter " ++ std.fmt.comptimePrint("{d}", .{i}) ++
-                ", expected '" ++ @typeName(Expect) ++
-                "', found '" ++ @typeName(actual) ++ "'.");
+        const T_arg_actual = param.type.?;
+        const T_arg: type = if (@TypeOf(args[i]) == type) args[i] else {
+            @compileError(std.fmt.comptimePrint(
+                "Invalid declaration (index {d} `args`), expected type found '{s}'",
+                .{ i, @typeName(@TypeOf(args[i])) },
+            ));
+        };
+        if (T_arg_actual != T_arg) {
+            @compileError(std.fmt.comptimePrint(
+                "Type mismatch for parameter {d}, expected '{s}' found '{s}'",
+                .{ i, @typeName(T_arg), @typeName(T_arg_actual) },
+            ));
         }
     }
 
     // check return type
-    const Ret = Fn_info.Fn.return_type.?;
+    const Ret = T_fn_info.Fn.return_type.?;
     if (Ret != T_ret) {
-        @compileError("Return type mismatch, expected '" ++
-            @typeName(T_ret) ++ "', found '" ++ @typeName(Ret) ++ "'.");
+        @compileError(std.fmt.comptimePrint(
+            "Type mismatch for return, expected '{s}' (`T_ret`) found '{s}' (in `T_fn`).",
+            .{ @typeName(T_ret), @typeName(T_fn) },
+        ));
     }
 }
 
 test assertFn {
-    comptime { // test correct case
+    comptime {
         const foo_fn_type = fn (a: u32, b: u32) u32;
         assertFn(foo_fn_type, .{ u32, u32 }, u32);
-    }
-    { // TODO! test compile error case (currently not possible)
+
+        // TODO! test compile error case (currently not possible)
     }
 }
 
 /// Assert that type `T` matches any of `types`.
 /// `types` should be a tuple of 'std.builtin.Type(enum)', example: .{ .Int, .Float }
-/// Optionally display a formatted message with `fmt` and `args`.
-pub fn assertType(comptime T: type, comptime types: anytype, comptime fmt: []const u8, comptime args: anytype) void {
-    assertAndMsg(@inComptime(), "Function 'assertType' is invalid runtime (prefix with 'comptime').", .{});
+/// `tag` is displayed in the fail message, format could be "<calling_function_name>.<param_name>".
+pub fn assertType(comptime T: type, comptime types: anytype, comptime tag: []const u8) void {
+    assertComptime(@src().fn_name);
 
     const T_types = @TypeOf(types);
     switch (@typeInfo(T_types)) {
         .Struct => |info| if (!info.is_tuple) {
             @compileError(std.fmt.comptimePrint("Expected tuple (`types`), found '{s}'", .{@typeName(T_types)}));
         },
-        else => .{},
+        else => {},
     }
 
     comptime var types_str: []const u8 = "";
@@ -96,25 +121,19 @@ pub fn assertType(comptime T: type, comptime types: anytype, comptime fmt: []con
         if (@typeInfo(T) == t) return;
     }
 
-    // fail message
-    if (fmt.len > 0) {
-        @compileError(std.fmt.comptimePrint(fmt, args));
-    } else {
-        @compileError(std.fmt.comptimePrint(
-            "Type '{s}' (`T`) does not match any of .{{s}} (`types`).",
-            .{ @typeName(T), types_str },
-        ));
-    }
+    @compileError(std.fmt.comptimePrint(
+        "Type '{s}' (`{s}`) does not match any of .{{s}}",
+        .{ @typeName(T), tag, types_str },
+    ));
 }
 
 test assertType {
-    // test correct case
     comptime {
         const types = .{ .Int, .Bool };
-        assertType(u8, types, "", .{});
-        assertType(bool, types, "", .{});
-    }
-    { // TODO! test compile error case (currently not possible)
+        assertType(u8, types, "types");
+        assertType(bool, types, "types");
+
+        // TODO! test compile error case (currently not possible)
     }
 }
 
@@ -128,8 +147,9 @@ test assertType {
 ///     .{ ... },
 /// }
 pub fn verifyContext(comptime ctx: type, comptime decls: anytype) void {
-    comptime assertType(ctx, .{.Struct}, "Expected namespace (`ctx`), found '{s}'.", .{@typeName(ctx)});
-    comptime assertType(@TypeOf(decls), .{.Struct}, "Expected tuple (`decls`), found '{s}'.", .{@typeName(@TypeOf(decls))});
+    assertComptime(@src().fn_name);
+    assertType(ctx, .{.Struct}, "verifyContext.ctx");
+    assertType(@TypeOf(decls), .{.Struct}, "verifyContext.decls");
 
     inline for (decls, 0..) |decl, i| {
 
@@ -187,14 +207,7 @@ pub fn verifyContext(comptime ctx: type, comptime decls: anytype) void {
         const T_actual = @TypeOf(@field(ctx, name));
 
         switch (@typeInfo(T_actual)) {
-            .Fn => {
-                if (fn_args.len == 0) {
-                    @compileError(std.fmt.comptimePrint(
-                        "Missing function parameter types for '{s}' (in `decls`).",
-                        .{name},
-                    ));
-                }
-            },
+            .Fn => assertFn(T_actual, fn_args, T_final),
             else => {
                 if (fn_args.len > 0) {
                     @compileError(std.fmt.comptimePrint(
@@ -214,19 +227,23 @@ pub fn verifyContext(comptime ctx: type, comptime decls: anytype) void {
 }
 
 test verifyContext {
-    const ctx = struct {
-        const someConst: u8 = 4;
-        fn hash(data: u64) u64 {
-            return std.hash.Wyhash.hash(data);
-        }
-    };
+    comptime {
+        const ctx = struct {
+            const someConst: u8 = 4;
+            fn hash(data: u64) u64 {
+                return std.hash.Wyhash.hash(data);
+            }
+        };
 
-    const decls = .{
-        .{ "someConst", u8, .{} },
-        .{ "hash", u64, .{u64} },
-    };
+        const decls = .{
+            .{ "someConst", u8, .{} },
+            .{ "hash", u64, .{u64} },
+        };
 
-    verifyContext(ctx, decls);
+        verifyContext(ctx, decls);
+
+        // TODO! test compile error case (currently not possible)
+    }
 }
 
 /// Check if `T` is of string type (only considers ASCII strings).
@@ -292,26 +309,26 @@ pub fn PointerArrayChildType(comptime T: type) type {
 }
 
 test PointerArrayChildType {
-    const T = u8;
-    const array = [_]T{ 4, 4, 4, 4 };
+    comptime {
+        const T = u8;
+        var C: type = undefined;
+        const array = [_]T{ 4, 4, 4, 4 };
 
-    comptime { // test slice
+        // test slice
         const slice: []const T = &array;
-        const C = PointerArrayChildType(@TypeOf(slice));
+        C = PointerArrayChildType(@TypeOf(slice));
         expectEqual(T, C) catch unreachable;
-    }
 
-    comptime { // test many-item pointer
+        // test many-item pointer
         const many: [*]const T = &array;
-        const C = PointerArrayChildType(@TypeOf(many));
+        C = PointerArrayChildType(@TypeOf(many));
         expectEqual(T, C) catch unreachable;
-    }
 
-    comptime { // test one pointer
+        // test one pointer
         const ptr: *const [array.len]T = &array;
-        const C = PointerArrayChildType(@TypeOf(ptr));
+        C = PointerArrayChildType(@TypeOf(ptr));
         expectEqual(T, C) catch unreachable;
-    }
-    { // TODO! test compile error case (currently not possible)
+
+        // TODO! test compile error case (currently not possible)
     }
 }

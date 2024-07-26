@@ -16,6 +16,7 @@ const assertPowOf2 = maple.math.assertPowOf2;
 const fastMod = maple.math.fastMod;
 const mulPercent = maple.math.mulPercent;
 const panic = std.debug.panic;
+const verifyContext = maple.typ.verifyContext;
 const wrapDecrement = maple.math.wrapDecrement;
 const wrapIncrement = maple.math.wrapIncrement;
 
@@ -43,7 +44,7 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
     return struct {
         pub const Options = struct {
             // initial capacity of the map, asserted to be a power of 2 (efficiency reasons)
-            init_capacity: u32 = 100,
+            init_capacity: u32 = 64,
             // whether the map can grow beyond `init_capacity`
             growable: bool = true,
             // grow map at this load (75% capacity)
@@ -170,7 +171,7 @@ pub fn RobinHashMap(comptime K: type, comptime V: type) type {
 }
 
 /// Digest of some 'RobinHashMap' init-function.
-/// Depending on `buffer_type` certain operations may be pruned or optimized.
+/// Depending on `buffer_type` certain operations may be pruned or optimized comptime.
 pub fn RobinHashMapGeneric(comptime K: type, comptime V: type, comptime buffer_type: enum { Alloc, Buffer, Comptime }) type {
     return struct {
         const Self = @This();

@@ -1,3 +1,6 @@
+//! Author: palsmo
+//! Status: In Progress
+
 const std = @import("std");
 
 const expectEqual = std.testing.expectEqual;

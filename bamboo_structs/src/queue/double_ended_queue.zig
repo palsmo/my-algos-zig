@@ -103,7 +103,7 @@ pub fn DoubleEndedQueue(comptime T: type) type {
 }
 
 /// Digest of some 'DoubleEndedQueue' init-function.
-/// Depending on `buffer_type` certain operations may be pruned or optimized.
+/// Depending on `buffer_type` certain operations may be pruned or optimized comptime.
 pub fn DoubleEndedQueueGeneric(comptime T: type, comptime buffer_type: enum { Alloc, Buffer, Comptime }) type {
     return struct {
         const Self = @This();

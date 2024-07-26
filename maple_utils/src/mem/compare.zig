@@ -1,3 +1,6 @@
+//! Author: palsmo
+//! Status: In Progress
+
 const std = @import("std");
 
 const panic = std.debug.panic;
@@ -23,52 +26,57 @@ test cmp {
     const b = 2;
 
     // test '<'
-    try expect(cmp(a, .lt, b));
-    try expect(cmp(b, .lt, a) == false);
-    try expect(cmp(a, .lt, a) == false);
+    try expectEqual(true, cmp(a, .lt, b));
+    try expectEqual(false, cmp(b, .lt, a));
+    try expectEqual(false, cmp(a, .lt, a));
 
     // test '>'
-    try expect(cmp(a, .gt, b) == false);
-    try expect(cmp(b, .gt, a));
-    try expect(cmp(a, .gt, a) == false);
+    try expectEqual(false, cmp(a, .gt, b));
+    try expectEqual(true, cmp(b, .gt, a));
+    try expectEqual(false, cmp(a, .gt, a));
 
-    // test '<='
-    try expect(cmp(a, .lte, b));
-    try expect(cmp(b, .lte, a) == false);
-    try expect(cmp(a, .lte, a));
+    // test '<=',
+    try expectEqual(true, cmp(a, .lte, b));
+    try expectEqual(false, cmp(b, .lte, a));
+    try expectEqual(true, cmp(a, .lte, a));
 
     // test '>='
-    try expect(cmp(a, .gte, b) == false);
-    try expect(cmp(b, .gte, a));
-    try expect(cmp(a, .gte, a));
+    try expectEqual(false, cmp(a, .gte, b));
+    try expectEqual(true, cmp(b, .gte, a));
+    try expectEqual(true, cmp(a, .gte, a));
 
     // test '=='
-    try expect(cmp(a, .eq, b) == false);
-    try expect(cmp(b, .eq, a) == false);
-    try expect(cmp(a, .eq, a));
+    try expectEqual(false, cmp(a, .eq, b));
+    try expectEqual(false, cmp(b, .eq, a));
+    try expectEqual(true, cmp(a, .eq, a));
 
     // test '!='
-    try expect(cmp(a, .neq, b));
-    try expect(cmp(b, .neq, a));
-    try expect(cmp(a, .neq, a) == false);
+    try expectEqual(true, cmp(a, .neq, b));
+    try expectEqual(true, cmp(b, .neq, a));
+    try expectEqual(false, cmp(a, .neq, a));
 }
 
 /// Order of `a` relative `b`, asserts same type, returns .lt, .gt or .eq
 /// Efficient, comptime evaluates to single type specific code blocks.
 /// Not inlined by default since some prongs contain recursion, compiler may decide to inline.
+///
 /// Characteristics:
-/// Numeric  -> numeric comparison.
-/// Array    -> element sequential comparison.
-/// Vector   -> element sequential comparison.
-/// Pointer  -> [slice, many] element sequential comparison, if same then numeric comparison of sizes.
-///             [one, c] pointee comparison.
-/// Optional -> if `a` and `b` non-null then value comparison, else null < non-null.
-/// Bool     -> false < true.
-/// Enum     -> numeric comparison.
-/// Union    -> if same active field then value comparison, else field order (first < last).
-/// Struct   -> field by field (top to bottom), field-value comparison.
-/// Null     -> always equal
-/// Void     -> always equal
+///
+///   type   |                             comparison
+/// ---------|-------------------------------------------------------------------
+/// Numeric  | numeric
+/// Array    | element sequential
+/// Vector   | element sequential
+/// Pointer  | [slice, many] element sequential, if same then numeric of sizes
+///          | [one, c] pointee comparison
+/// Optional | if `a` and `b` non-null then value, else null < non-null
+/// Bool     | false < true.
+/// Enum     | numeric
+/// Union    | if same active field then value, else field order (first < last).
+/// Struct   | field by field (top to bottom), field-value
+/// Null     | always equal
+/// Void     | always equal
+/// -----------------------------------------------------------------------------
 pub fn ord(a: anytype, b: anytype) std.math.Order {
     const T = @TypeOf(a);
     if (T != @TypeOf(b)) @compileError("Arguments are not same type, can't evaluate order.");

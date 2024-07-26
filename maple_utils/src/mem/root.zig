@@ -1,3 +1,6 @@
+//! Author: palsmo
+//! Status: In Progress
+
 const compare = @import("./compare.zig");
 const misc = @import("./misc.zig");
 
