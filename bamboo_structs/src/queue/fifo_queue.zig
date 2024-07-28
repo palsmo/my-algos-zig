@@ -1,22 +1,27 @@
 //! Author: palsmo
 //! Status: Done
 //! Read: https://en.wikipedia.org/wiki/FIFO_(computing_and_electronics)
+//! About: First-In-First-Out Queue Data Structure
 
 const std = @import("std");
 
-const _deque = @import("./double_ended_queue.zig");
-const shared = @import("./shared.zig");
+const root_deque = @import("./double_ended_queue.zig");
+const root_shared = @import("./shared.zig");
+const shared = @import("../shared.zig");
 
 const Allocator = std.mem.Allocator;
-const DoubleEndedQueue = _deque.DoubleEndedQueue;
-const DoubleEndedQueueGeneric = _deque.DoubleEndedQueueGeneric;
-const Error = shared.Error;
+const DoubleEndedQueue = root_deque.DoubleEndedQueue;
+const DoubleEndedQueueGeneric = root_deque.DoubleEndedQueueGeneric;
+const Error = root_shared.Error;
+const MemoryMode = shared.MemoryMode;
 
 /// A first-in-first-out queue (fifo) implemented for items of type `T`.
 /// Provides efficient insertion, removal and lookup operations.
+/// Useful as event/task queue, message buffer or primitive for other structures.
+/// Depending on `memory_mode` certain operations may be pruned or optimized comptime.
 ///
 /// Properties:
-/// Uses 'DoubleEndedQueue' logic under the hood.
+/// Uses 'DoubleEndedQueue' structure under the hood.
 ///
 ///  complexity |     best     |   average    |    worst     |        factor
 /// ------------|--------------|--------------|--------------|----------------------
@@ -28,11 +33,13 @@ const Error = shared.Error;
 /// ------------|--------------|--------------|--------------|----------------------
 ///  cache loc  | good         | good         | decent       | usage pattern (wrap)
 /// --------------------------------------------------------------------------------
-pub fn FifoQueue(comptime T: type) type {
+pub fn FifoQueue(comptime T: type, comptime memory_mode: MemoryMode) type {
     return struct {
+        const Self = @This();
+
         pub const Options = struct {
             // initial capacity of the queue, asserted to be a power of 2 (efficiency reasons)
-            init_capacity: usize = 64,
+            init_capacity: usize = 32,
             // whether the queue can grow beyond `init_capacity`
             growable: bool = true,
             // whether the queue can shrink when grown past `init_capacity`,
@@ -40,25 +47,35 @@ pub fn FifoQueue(comptime T: type) type {
             shrinkable: bool = true,
         };
 
-        /// Initialize the queue, allocating memory on the heap.
-        /// User should release memory after use by calling 'deinit'.
-        /// Function is valid only during _runtime_.
-        pub fn initAlloc(options: Options, allocator: Allocator) !FifoQueueGeneric(T, .Alloc) {
+        // struct fields
+        deque: switch (memory_mode) {
+            .Alloc => DoubleEndedQueue(T, .Alloc),
+            .Buffer => DoubleEndedQueue(T, .Buffer),
+            .Comptime => DoubleEndedQueue(T, .Comptime),
+        },
+
+        /// Initialize the queue depending on `memory_mode` (read more _MemoryMode_ docs).
+        pub const init = switch (memory_mode) {
+            .Alloc => initAlloc,
+            .Buffer => initBuffer,
+            .Comptime => initComptime,
+        };
+
+        /// Initialize the queue for using heap allocation.
+        fn initAlloc(allocator: Allocator, options: Options) !Self {
             return .{
-                .deque = try DoubleEndedQueue(T).initAlloc(.{
+                .deque = try DoubleEndedQueue(T, .Alloc).init(allocator, .{
                     .init_capacity = options.init_capacity,
                     .growable = options.growable,
                     .shrinkable = options.shrinkable,
-                }, allocator),
+                }),
             };
         }
 
-        /// Initialize the queue to work with static space in buffer `buf`.
-        /// Fields in `options` that will be ignored are; init_capacity, growable, shrinkable.
-        /// Function is valid during _comptime_ or _runtime_.
-        pub fn initBuffer(buf: []T, options: Options) FifoQueueGeneric(T, .Buffer) {
+        /// Initialize the queue for working with user provided `buf`.
+        fn initBuffer(buf: []T, options: Options) Self {
             return .{
-                .deque = DoubleEndedQueue(T).initBuffer(buf, .{
+                .deque = DoubleEndedQueue(T, .Buffer).init(buf, .{
                     .init_capacity = buf.len,
                     .growable = options.growable,
                     .shrinkable = options.shrinkable,
@@ -66,39 +83,23 @@ pub fn FifoQueue(comptime T: type) type {
             };
         }
 
-        /// Initialize the queue, allocating memory in .rodata or
-        /// compiler's address space if not referenced runtime.
-        /// Function is valid during _comptime_.
-        pub fn initComptime(comptime options: Options) FifoQueueGeneric(T, .Comptime) {
+        /// Initialize the queue for using comptime memory allocation.
+        fn initComptime(comptime options: Options) Self {
             return .{
-                .deque = DoubleEndedQueue(T).initComptime(.{
+                .deque = DoubleEndedQueue(T, .Comptime).init(.{
                     .init_capacity = options.init_capacity,
                     .growable = options.growable,
                     .shrinkable = options.shrinkable,
                 }),
             };
         }
-    };
-}
 
-/// Digest of some 'FifoQueue' init-function.
-/// Depending on `buffer_type` certain operations may be pruned or optimized.
-pub fn FifoQueueGeneric(comptime T: type, comptime buffer_type: enum { Alloc, Buffer, Comptime }) type {
-    return struct {
-        const Self = @This();
-
-        // struct fields
-        deque: switch (buffer_type) {
-            .Alloc => DoubleEndedQueueGeneric(T, .Alloc),
-            .Buffer => DoubleEndedQueueGeneric(T, .Buffer),
-            .Comptime => DoubleEndedQueueGeneric(T, .Comptime),
-        },
-
-        /// Release allocated memory, cleanup routine for 'initAlloc'.
+        /// Release allocated memory, cleanup routine.
         pub fn deinit(self: *Self) void {
             self.deque.deinit();
         }
 
+        /// Identical to 'push' but guaranteed to be inlined.
         pub inline fn pushInline(self: *Self, item: T) !void {
             try self.deque.pushLastInline(self, item);
         }
@@ -109,6 +110,7 @@ pub fn FifoQueueGeneric(comptime T: type, comptime buffer_type: enum { Alloc, Bu
             try self.deque.pushLast(item);
         }
 
+        /// Identical to 'pop' but guaranteed to be inlined.
         pub inline fn popInline(self: *Self) !T {
             return try self.deque.popFirstInline(self);
         }
@@ -119,51 +121,53 @@ pub fn FifoQueueGeneric(comptime T: type, comptime buffer_type: enum { Alloc, Bu
             return try self.deque.popFirst();
         }
 
-        pub inline fn peekInline(self: *Self) ?T {
+        /// Identical to 'peek' but guaranteed to be inlined.
+        pub inline fn peekInline(self: *const Self) ?T {
             return self.deque.peekFirstInline();
         }
 
         /// Get the first item in the queue.
         /// Returns _null_ only if there's no value.
-        pub inline fn peek(self: *Self) ?T {
+        pub inline fn peek(self: *const Self) ?T {
             return self.deque.peekFirst();
         }
 
-        pub inline fn peekIndexInline(self: *Self, index: usize) ?T {
+        /// Identical to 'peekIndex' but guaranteed to be inlined.
+        pub inline fn peekIndexInline(self: *const Self, index: usize) ?T {
             return self.deque.peekIndexInline(self, index);
         }
 
         /// Get an item at index `index` in the queue.
         /// Returns _null_ only if there's no value.
-        pub inline fn peekIndex(self: *Self, index: usize) ?T {
+        pub inline fn peekIndex(self: *const Self, index: usize) ?T {
             return self.deque.peekIndex(index);
         }
 
         /// Get current amount of 'T' that's buffered in the queue.
-        pub inline fn capacity(self: *Self) usize {
+        pub inline fn capacity(self: *const Self) usize {
             return self.deque.capacity();
         }
 
         /// Get current amount of 'T' that's occupying the queue.
-        pub inline fn length(self: *Self) usize {
+        pub inline fn length(self: *const Self) usize {
             return self.deque.length();
         }
 
         /// Reset queue to its empty state.
-        /// This function may throw error as part of the allocation process.
+        /// This function may throw error as part of an allocation process.
         pub inline fn reset(self: *Self) !void {
             try self.deque.reset();
         }
 
         /// Check if the queue is empty.
         /// Returns _true_ (empty) or _false_ (not empty).
-        pub inline fn isEmpty(self: *Self) bool {
+        pub inline fn isEmpty(self: *const Self) bool {
             return self.deque.isEmpty();
         }
 
         /// Check if the queue is full.
         /// Returns _true_ (full) or _false_ (not full).
-        pub inline fn isFull(self: *Self) bool {
+        pub inline fn isFull(self: *const Self) bool {
             return self.deque.isFull();
         }
     };
@@ -177,11 +181,11 @@ const expectError = std.testing.expectError;
 
 test "Allocated FifoQueue" {
     const allocator = std.testing.allocator;
-    var fifo = try FifoQueue(u8).initAlloc(.{
+    var fifo = try FifoQueue(u8, .Alloc).init(allocator, .{
         .init_capacity = 4,
         .growable = true,
         .shrinkable = true,
-    }, allocator);
+    });
     defer fifo.deinit();
 
     // test empty state -->
@@ -252,7 +256,7 @@ test "Allocated FifoQueue" {
 
 test "Buffered FifoQueue" {
     var buffer: [2]u8 = undefined;
-    var fifo = FifoQueue(u8).initBuffer(&buffer, .{});
+    var fifo = FifoQueue(u8, .Buffer).init(&buffer, .{});
 
     // test general -->
 
@@ -281,7 +285,7 @@ test "Buffered FifoQueue" {
 
 test "Comptime FifoQueue" {
     comptime {
-        var fifo = FifoQueue(u8).initComptime(.{
+        var fifo = FifoQueue(u8, .Comptime).init(.{
             .init_capacity = 2,
             .growable = false,
             .shrinkable = false,

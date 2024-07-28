@@ -1,24 +1,29 @@
 //! Author: palsmo
 //! Status: Done
+//! About: Double-Ended Queue Data Structure
 //! Read: https://en.wikipedia.org/wiki/Double-ended_queue
 
 const std = @import("std");
 
 const maple = @import("maple_utils");
 
-const shared = @import("./shared.zig");
+const root_shared = @import("./shared.zig");
+const shared = @import("../shared.zig");
 
 const Allocator = std.mem.Allocator;
-const Error = shared.Error;
+const Error = root_shared.Error;
+const MemoryMode = shared.MemoryMode;
 const assertAndMsg = maple.debug.assertAndMsg;
+const assertComptime = maple.debug.assertComptime;
 const assertPowOf2 = maple.math.assertPowOf2;
 const panic = std.debug.panic;
 const wrapDecrement = maple.math.wrapDecrement;
 const wrapIncrement = maple.math.wrapIncrement;
 
 /// A double-ended queue (deque) for items of type `T`.
-/// Useful as primitive for other structures.
 /// Provides efficient insertion, removal and lookup operations at both ends.
+/// Useful as primitive for other structures.
+/// Depending on `memory_mode` certain operations may be pruned or optimized comptime.
 ///
 /// Reference to 'self.buffer' may become invalidated after grow/shrink routine,
 /// use 'self.isValidRef' to verify.
@@ -36,11 +41,13 @@ const wrapIncrement = maple.math.wrapIncrement;
 /// ------------|--------------|--------------|--------------|----------------------
 ///  cache loc  | good         | good         | decent       | usage pattern (wrap)
 /// --------------------------------------------------------------------------------
-pub fn DoubleEndedQueue(comptime T: type) type {
+pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type {
     return struct {
+        const Self = @This();
+
         pub const Options = struct {
             // initial capacity of the queue, asserted to be a power of 2 (efficiency reasons)
-            init_capacity: usize = 64,
+            init_capacity: usize = 32,
             // whether the queue can grow beyond `init_capacity`
             growable: bool = true,
             // whether the queue can shrink when grown past `init_capacity`,
@@ -48,10 +55,23 @@ pub fn DoubleEndedQueue(comptime T: type) type {
             shrinkable: bool = true,
         };
 
-        /// Initialize the queue, allocating memory on the heap.
-        /// User should release memory after use by calling 'deinit'.
-        /// Function is valid only during _runtime_.
-        pub fn initAlloc(options: Options, allocator: Allocator) !DoubleEndedQueueGeneric(T, .Alloc) {
+        // struct fields
+        buffer: []T,
+        head: usize = 0,
+        tail: usize = 0,
+        size: usize = 0,
+        options: Options,
+        allocator: ?Allocator,
+
+        /// Initialize the queue depending on `memory_mode` (read more _MemoryMode_ docs).
+        pub const init = switch (memory_mode) {
+            .Alloc => initAlloc,
+            .Buffer => initBuffer,
+            .Comptime => initComptime,
+        };
+
+        /// Initialize the queue for using heap allocation.
+        fn initAlloc(allocator: Allocator, options: Options) !Self {
             assertAndMsg(options.init_capacity > 0, "Can't initialize with zero size.", .{});
             assertPowOf2(options.init_capacity);
 
@@ -62,10 +82,8 @@ pub fn DoubleEndedQueue(comptime T: type) type {
             };
         }
 
-        /// Initialize the queue to work with static space in buffer `buf`.
-        /// Fields in `options` that will be ignored are; init_capacity, growable, shrinkable.
-        /// Function is valid during _comptime_ or _runtime_.
-        pub fn initBuffer(buf: []T, options: Options) DoubleEndedQueueGeneric(T, .Buffer) {
+        /// Initialize the queue for working with user provided `buf`.
+        fn initBuffer(buf: []T, options: Options) Self {
             assertAndMsg(buf.len > 0, "Can't initialize with zero size.", .{});
             assertPowOf2(buf.len);
 
@@ -82,16 +100,14 @@ pub fn DoubleEndedQueue(comptime T: type) type {
             };
         }
 
-        /// Initialize the queue, allocating memory in .rodata or
-        /// compiler's address space if not referenced runtime.
-        /// Function is valid during _comptime_.
-        pub fn initComptime(comptime options: Options) DoubleEndedQueueGeneric(T, .Comptime) {
-            assertAndMsg(@inComptime(), "Function 'initComptime' is invalid runtime (prefix with 'comptime').", .{});
+        /// Initialize the queue for using comptime memory allocation.
+        fn initComptime(comptime options: Options) Self {
+            assertComptime(@src().fn_name);
             assertAndMsg(options.init_capacity > 0, "Can't initialize with zero size.", .{});
             assertPowOf2(options.init_capacity);
 
             return .{
-                .buffer = b: { // not 'free-after-use', compiler promotes
+                .buffer = b: { // * not 'free-after-use', compiler promotes
                     var buf: [options.init_capacity]T = undefined;
                     break :b &buf;
                 },
@@ -99,49 +115,43 @@ pub fn DoubleEndedQueue(comptime T: type) type {
                 .allocator = null,
             };
         }
-    };
-}
 
-/// Digest of some 'DoubleEndedQueue' init-function.
-/// Depending on `buffer_type` certain operations may be pruned or optimized comptime.
-pub fn DoubleEndedQueueGeneric(comptime T: type, comptime buffer_type: enum { Alloc, Buffer, Comptime }) type {
-    return struct {
-        const Self = @This();
-
-        const Deque = DoubleEndedQueue(T);
-
-        // struct fields
-        buffer: []T,
-        head: usize = 0,
-        tail: usize = 0,
-        size: usize = 0,
-        options: Deque.Options,
-        allocator: ?Allocator,
-
-        /// Release allocated memory, cleanup routine for 'initAlloc'.
-        pub fn deinit(self: *Self) void {
-            switch (buffer_type) {
+        /// Release allocated memory, cleanup routine.
+        pub fn deinit(self: *const Self) void {
+            switch (memory_mode) {
                 .Alloc => self.allocator.?.free(self.buffer),
-                .Buffer, .Comptime => panic("Can't deallocate with nonexistent allocator.", .{}),
+                .Buffer, .Comptime => {
+                    const msg = "The queue is not allocated on the heap, remove unnecessary call 'deinit'";
+                    if (@inComptime()) @compileError(msg) else panic(msg, .{});
+                },
             }
         }
 
-        pub inline fn pushFirstInline(self: *Self, item: T) !void {
-            try @call(.always_inline, pushFirst, .{ self, item });
+        /// Identical to 'pushFirst' but guaranteed to be inlined.
+        pub inline fn pushFirstInline(self: *Self, item: T, issue_mode: enum { Error, Panic }) switch (issue_mode) {
+            .Error => anyerror!void,
+            .Panic => void,
+        } {
+            try @call(.always_inline, pushFirst, .{ self, item, issue_mode });
         }
 
         /// Store an `item` first in the queue.
-        /// This function throws error when adding at max capacity with 'self.options.growable' set to false.
-        pub fn pushFirst(self: *Self, item: T) !void {
-            // grow?
+        /// Decide with `issue_mode` to handle errors normally or panic when error is possible.
+        /// Throws error when adding at max capacity with 'self.options.growable' set to false,
+        /// or as part of an allocation process (grow).
+        pub fn pushFirst(self: *Self, item: T, comptime issue_mode: enum { Error, Panic }) switch (issue_mode) {
+            .Error => anyerror!void,
+            .Panic => void,
+        } {
+            if (memory_mode == .Comptime) assertComptime(@src().fn_name);
+
             if (self.size < self.buffer.len) {} else {
-                switch (buffer_type) {
-                    .Alloc => if (self.options.growable) try self.grow() else return Error.Overflow,
-                    .Buffer => return Error.Overflow,
-                    .Comptime => {
-                        assertAndMsg(@inComptime(), "Function 'pushFirst' (comptime version) is invalid at runtime (prefix with 'comptime').", .{});
-                        if (self.options.growable) try self.grow() else return Error.Overflow;
+                switch (issue_mode) {
+                    .Error => switch (memory_mode) {
+                        .Alloc, .Comptime => if (self.options.growable) try self.grow() else return Error.Overflow,
+                        .Buffer => return Error.Overflow,
                     },
+                    .Panic => panic("Could possibly throw an unhandled error.", .{}),
                 }
             }
 
@@ -153,22 +163,31 @@ pub fn DoubleEndedQueueGeneric(comptime T: type, comptime buffer_type: enum { Al
             self.size += 1;
         }
 
-        pub inline fn pushLastInline(self: *Self, item: T) !void {
-            try @call(.always_inline, pushLast, .{ self, item });
+        /// Identical to 'pushLast' but guaranteed to be inlined.
+        pub inline fn pushLastInline(self: *Self, item: T, issue_mode: enum { Error, Panic }) switch (issue_mode) {
+            .Error => anyerror!void,
+            .Panic => void,
+        } {
+            try @call(.always_inline, pushLast, .{ self, item, issue_mode });
         }
 
         /// Store an `item` last in the queue.
-        /// This function throws error when adding at max capacity with 'self.options.growable' set to false.
-        pub fn pushLast(self: *Self, item: T) !void {
-            // grow?
+        /// Decide with `issue_mode` to handle errors normally or panic when error is possible.
+        /// Throws error when adding at max capacity with 'self.options.growable' set to false,
+        /// or as part of an allocation process (grow).
+        pub fn pushLast(self: *Self, item: T, comptime issue_mode: enum { Error, Panic }) switch (issue_mode) {
+            .Error => anyerror!void,
+            .Panic => void,
+        } {
+            if (memory_mode == .Comptime) assertComptime(@src().fn_name);
+
             if (self.size < self.buffer.len) {} else {
-                switch (buffer_type) {
-                    .Alloc => if (self.options.growable) try self.grow() else return Error.Overflow,
-                    .Buffer => return Error.Overflow,
-                    .Comptime => {
-                        assertAndMsg(@inComptime(), "Function 'pushLast' (comptime version) is invalid at runtime (prefix with 'comptime').", .{});
-                        if (self.options.growable) try self.grow() else return Error.Overflow;
+                switch (issue_mode) {
+                    .Error => switch (memory_mode) {
+                        .Alloc, .Comptime => if (self.options.growable) try self.grow() else return Error.Overflow,
+                        .Buffer => return Error.Overflow,
                     },
+                    .Panic => panic("Could possibly throw an unhandled error.", .{}),
                 }
             }
 
@@ -180,14 +199,28 @@ pub fn DoubleEndedQueueGeneric(comptime T: type, comptime buffer_type: enum { Al
             self.size += 1;
         }
 
-        pub inline fn popFirstInline(self: *Self) !T {
+        /// Identical to 'popFirst' but guaranteed to be inlined.
+        pub inline fn popFirstInline(self: *Self, issue_mode: enum { Error, Panic }) switch (issue_mode) {
+            .Error => anyerror!T,
+            .Panic => T,
+        } {
             return try @call(.always_inline, popFirst, .{self});
         }
 
         /// Get the first item in the queue, free its memory.
-        /// This function throws error when trying to release from empty queue.
-        pub fn popFirst(self: *Self) !T {
-            if (self.size != 0) {} else return Error.Underflow;
+        /// Throws error when trying to release from empty queue, or as part of an allocation process (shrink).
+        pub fn popFirst(self: *Self, comptime issue_mode: enum { Error, Panic }) switch (issue_mode) {
+            .Error => anyerror!T,
+            .Panic => T,
+        } {
+            if (memory_mode == .Comptime) assertComptime(@src().fn_name);
+
+            if (self.size != 0) {} else {
+                switch (issue_mode) {
+                    .Error => return Error.Underflow,
+                    .Panic => panic("Tried to release value from empty queue.", .{}),
+                }
+            }
 
             const item = self.buffer[self.head];
             if (self.size > 1) {
@@ -196,37 +229,47 @@ pub fn DoubleEndedQueueGeneric(comptime T: type, comptime buffer_type: enum { Al
 
             self.size -= 1;
 
-            // shrink?
-            switch (buffer_type) {
-                .Alloc => {
-                    if (self.options.shrinkable) {
-                        if (self.size >= self.options.init_capacity) {
-                            if (self.size > self.buffer.len / 4) {} else try self.shrink();
+            switch (memory_mode) {
+                .Alloc, .Comptime => {
+                    if (self.options.shrinkable and
+                        self.size >= self.options.init_capacity and
+                        self.size <= self.buffer.len / 4)
+                    {
+                        switch (issue_mode) {
+                            .Error => try self.shrink(),
+                            .Panic => panic("Could possibly throw an unhandled error.", .{}),
                         }
                     }
                 },
                 .Buffer => {},
-                .Comptime => {
-                    assertAndMsg(@inComptime(), "Function 'popFirst' (comptime version) is invalid at runtime (prefix with 'comptime').", .{});
-                    if (self.options.shrinkable) {
-                        if (self.size >= self.options.init_capacity) {
-                            if (self.size > self.buffer.len / 4) {} else try self.shrink();
-                        }
-                    }
-                },
             }
 
             return item;
         }
 
-        pub inline fn popLastInline(self: *Self) !T {
+        /// Identical to 'popLast' but guaranteed to be inlined.
+        pub inline fn popLastInline(self: *Self, issue_mode: enum { Error, Panic }) switch (issue_mode) {
+            .Error => anyerror!T,
+            .Panic => T,
+        } {
             return try @call(.always_inline, popLast, .{self});
         }
 
         /// Get the last item in the queue, free its memory.
-        /// This function throws error when trying to release from empty queue.
-        pub fn popLast(self: *Self) !T {
-            if (self.size != 0) {} else return Error.Underflow;
+        /// Get the first item in the queue, free its memory.
+        /// Throws error when trying to release from empty queue, or as part of an allocation process (shrink).
+        pub fn popLast(self: *Self, comptime issue_mode: enum { Error, Panic }) switch (issue_mode) {
+            .Error => anyerror!T,
+            .Panic => T,
+        } {
+            if (memory_mode == .Comptime) assertComptime(@src().fn_name);
+
+            if (self.size != 0) {} else {
+                switch (issue_mode) {
+                    .Error => return Error.Underflow,
+                    .Panic => panic("Tried to release value from empty queue.", .{}),
+                }
+            }
 
             const item = self.buffer[self.tail];
             if (self.size > 1) {
@@ -235,58 +278,56 @@ pub fn DoubleEndedQueueGeneric(comptime T: type, comptime buffer_type: enum { Al
 
             self.size -= 1;
 
-            // shrink?
-            switch (buffer_type) {
-                .Alloc => {
-                    if (self.options.shrinkable) {
-                        if (self.size >= self.options.init_capacity) {
-                            if (self.size > self.buffer.len / 4) {} else try self.shrink();
+            switch (memory_mode) {
+                .Alloc, .Comptime => {
+                    if (self.options.shrinkable and
+                        self.size >= self.options.init_capacity and
+                        self.size <= self.buffer.len / 4)
+                    {
+                        switch (issue_mode) {
+                            .Error => try self.shrink(),
+                            .Panic => panic("Could possibly throw an unhandled error.", .{}),
                         }
                     }
                 },
                 .Buffer => {},
-                .Comptime => {
-                    assertAndMsg(@inComptime(), "Function 'popLast' (comptime version) is invalid at runtime (prefix with 'comptime').", .{});
-                    if (self.options.shrinkable) {
-                        if (self.size >= self.options.init_capacity) {
-                            if (self.size > self.buffer.len / 4) {} else try self.shrink();
-                        }
-                    }
-                },
             }
 
             return item;
         }
 
-        pub inline fn peekFirstInline(self: *Self) ?T {
+        /// Identical to 'peekFirst' but guaranteed to be inlined.
+        pub inline fn peekFirstInline(self: *const Self) ?T {
             return @call(.always_inline, peekFirst, .{self});
         }
 
         /// Get the first item in the queue.
         /// Returns _null_ only if there's no value.
-        pub fn peekFirst(self: *Self) ?T {
+        pub fn peekFirst(self: *const Self) ?T {
             if (self.size != 0) {} else return null;
             return self.buffer[self.head];
         }
 
-        pub inline fn peekLastInline(self: *Self) ?T {
+        /// Identical to 'peekLast' but guaranteed to be inlined.
+        pub inline fn peekLastInline(self: *const Self) ?T {
             return @call(.always_inline, peekLast, .{self});
         }
 
         /// Get the last item in the queue.
         /// Returns _null_ only if there's no value.
-        pub fn peekLast(self: *Self) ?T {
+        pub fn peekLast(self: *const Self) ?T {
             if (self.size != 0) {} else return null;
             return self.buffer[self.tail];
         }
 
-        pub inline fn peekIndexInline(self: *Self) ?T {
+        /// Identical to 'peekIndex' but guaranteed to be inlined.
+        pub inline fn peekIndexInline(self: *const Self) ?T {
             return @call(.always_inline, peekIndex, .{self});
         }
 
         /// Get an item at index `index` in the queue.
         /// Returns _null_ only if there's no value.
-        pub fn peekIndex(self: *Self, index: usize) ?T {
+        pub fn peekIndex(self: *const Self, index: usize) ?T {
             if (self.size > index) {} else return null;
             const sum = self.head +% index;
             const actual_index = sum % self.buffer.len;
@@ -294,27 +335,27 @@ pub fn DoubleEndedQueueGeneric(comptime T: type, comptime buffer_type: enum { Al
         }
 
         /// Get current amount of 'T' that's buffered in the queue.
-        pub inline fn capacity(self: *Self) usize {
+        pub inline fn capacity(self: *const Self) usize {
             return self.buffer.len;
         }
 
         /// Get current amount of 'T' that's occupying the queue.
-        pub inline fn length(self: *Self) usize {
+        pub inline fn length(self: *const Self) usize {
             return self.size;
         }
 
         /// Reset queue to its empty state.
-        /// This function may throw error as part of the allocation process.
+        /// Throws error as part of an allocation process.
         pub fn reset(self: *Self) !void {
             // allocate new buffer with initial capacity
             if (self.buffer.len != self.options.init_capacity) {
-                switch (buffer_type) {
+                switch (memory_mode) {
                     .Alloc => {
                         self.allocator.?.free(self.buffer);
                         self.buffer = try self.allocator.?.alloc(T, self.options.init_capacity);
                     },
-                    .Comptime => { // not 'free-after-use', compiler promotes
-                        assertAndMsg(@inComptime(), "Function 'reset' (comptime version) is invalid at runtime (prefix with 'comptime').", .{});
+                    .Comptime => { // * not 'free-after-use', compiler promotes
+                        assertComptime(@src().fn_name);
                         var buf: [self.options.init_capacity]T = undefined;
                         self.buffer = &buf;
                     },
@@ -329,31 +370,31 @@ pub fn DoubleEndedQueueGeneric(comptime T: type, comptime buffer_type: enum { Al
 
         /// Check if the queue is empty.
         /// Returns _true_ (empty) or _false_ (not empty).
-        pub inline fn isEmpty(self: *Self) bool {
+        pub inline fn isEmpty(self: *const Self) bool {
             return self.size == 0;
         }
 
         /// Check if the queue is full.
         /// Returns _true_ (full) or _false_ (not full).
-        pub inline fn isFull(self: *Self) bool {
+        pub inline fn isFull(self: *const Self) bool {
             return self.size == self.buffer.len;
         }
 
         /// Check if `ptr` holds the address of the current 'self.buffer'.
         /// Returns _true_ (valid ref) or _false_ (invalid ref).
-        pub inline fn isValidRef(self: *Self, ptr: *[]T) bool {
+        pub inline fn isValidRef(self: *const Self, ptr: *[]T) bool {
             return ptr == &self.buffer;
         }
 
         /// Copy over current content into new buffer of twice the size.
-        /// This function may throw error as part of the allocation process.
+        /// Throws error as part of an allocation process.
         fn grow(self: *Self) !void {
             // allocate new buffer with more capacity
             const new_capacity = try std.math.mul(usize, self.buffer.len, 2);
-            const new_buffer = switch (buffer_type) {
+            const new_buffer = switch (memory_mode) {
                 .Alloc => try self.allocator.?.alloc(T, new_capacity),
                 .Buffer => unreachable,
-                .Comptime => b: { // not 'free-after-use', compiler promotes
+                .Comptime => b: { // * not 'free-after-use', compiler promotes
                     var buf: [new_capacity]T = undefined;
                     break :b &buf;
                 },
@@ -377,7 +418,7 @@ pub fn DoubleEndedQueueGeneric(comptime T: type, comptime buffer_type: enum { Al
                 @memcpy(new_mem_b, old_mem_b);
             }
 
-            if (buffer_type == .Alloc) self.allocator.?.free(self.buffer);
+            if (memory_mode == .Alloc) self.allocator.?.free(self.buffer);
 
             self.buffer = new_buffer;
             self.head = 0;
@@ -385,13 +426,13 @@ pub fn DoubleEndedQueueGeneric(comptime T: type, comptime buffer_type: enum { Al
         }
 
         /// Copy over current content into a new buffer of half the size.
-        /// This function may throw error as part of the allocation process.
+        /// Throws error as part of an allocation process.
         fn shrink(self: *Self) !void {
             // allocate new buffer with less capacity
             const new_capacity = try std.math.divExact(usize, self.buffer.len, 2);
-            const new_buffer = switch (buffer_type) {
+            const new_buffer = switch (memory_mode) {
                 .Alloc => try self.allocator.?.alloc(T, new_capacity),
-                .Comptime => b: { // not 'free-after-use', compiler promotes
+                .Comptime => b: { // * not 'free-after-use', compiler promotes
                     var buf: [new_capacity]T = undefined;
                     break :b &buf;
                 },
@@ -416,11 +457,24 @@ pub fn DoubleEndedQueueGeneric(comptime T: type, comptime buffer_type: enum { Al
                 @memcpy(new_mem_b, old_mem_b);
             }
 
-            if (buffer_type == .Alloc) self.allocator.?.free(self.buffer);
+            if (memory_mode == .Alloc) self.allocator.?.free(self.buffer);
 
             self.buffer = new_buffer;
             self.head = 0;
             self.tail = self.size - 1;
+        }
+
+        inline fn mayGrowOrThrow(self: *Self) !void {
+            switch (memory_mode) {
+                .Alloc, .Comptime => if (self.options.growable) try self.grow() else return Error.Overflow,
+                .Buffer => return Error.Overflow,
+            }
+        }
+
+        inline fn mayShrinkOrThrow(self: *Self) !void {
+            if (self.size >= self.options.init_capacity) {
+                if (self.size > self.buffer.len / 4) {} else try self.shrink();
+            }
         }
     };
 }
@@ -433,11 +487,11 @@ const expectError = std.testing.expectError;
 
 test "Allocated DoubleEndedQueue" {
     const allocator = std.testing.allocator;
-    var deque = try DoubleEndedQueue(u8).initAlloc(.{
+    var deque = try DoubleEndedQueue(u8, .Alloc).init(allocator, .{
         .init_capacity = 4,
         .growable = true,
         .shrinkable = true,
-    }, allocator);
+    });
     defer deque.deinit();
 
     // test empty state -->
@@ -445,19 +499,19 @@ test "Allocated DoubleEndedQueue" {
     try expectEqual(4, deque.capacity());
     try expectEqual(0, deque.length());
     try expectEqual(true, deque.isEmpty());
-    try expectError(Error.Underflow, deque.popFirst());
-    try expectError(Error.Underflow, deque.popLast());
+    try expectError(Error.Underflow, deque.popFirst(.Error));
+    try expectError(Error.Underflow, deque.popLast(.Error));
     try expectEqual(null, deque.peekFirst());
     try expectEqual(null, deque.peekLast());
     try expectEqual(null, deque.peekIndex(0));
 
     // test basic push and pop -->
 
-    try deque.pushFirst(1);
-    try deque.pushLast(2);
+    deque.pushFirst(1, .Panic);
+    deque.pushLast(2, .Panic);
     try expectEqual(2, deque.length());
-    try expectEqual(1, try deque.popFirst());
-    try expectEqual(2, try deque.popLast());
+    try expectEqual(1, deque.popFirst(.Panic));
+    try expectEqual(2, deque.popLast(.Panic));
 
     // x x x x
     //   ^.---.
@@ -470,12 +524,12 @@ test "Allocated DoubleEndedQueue" {
 
     // test wrapping behavior -->
 
-    try deque.pushLast(1);
-    try deque.pushLast(2);
-    try deque.pushLast(3);
-    try deque.pushLast(4);
-    _ = try deque.popFirst();
-    try deque.pushLast(5);
+    deque.pushLast(1, .Panic);
+    deque.pushLast(2, .Panic);
+    deque.pushLast(3, .Panic);
+    deque.pushLast(4, .Panic);
+    _ = deque.popFirst(.Panic);
+    deque.pushLast(5, .Panic);
 
     // 5 2 3 4
     // ^ ^--.
@@ -483,10 +537,10 @@ test "Allocated DoubleEndedQueue" {
 
     try expectEqual(0, deque.tail); // tail wrap
 
-    _ = try deque.popLast();
-    _ = try deque.popLast();
-    try deque.pushFirst(4);
-    try deque.pushFirst(5);
+    _ = deque.popLast(.Panic);
+    _ = deque.popLast(.Panic);
+    deque.pushFirst(4, .Panic);
+    deque.pushFirst(5, .Panic);
 
     // 4 2 3 5
     //     ^ ^--.
@@ -500,16 +554,16 @@ test "Allocated DoubleEndedQueue" {
     try deque.reset();
     deque.options.init_capacity = 2;
 
-    try deque.pushFirst(1);
-    try deque.pushLast(2);
-    try deque.pushFirst(3);
+    deque.pushFirst(1, .Panic);
+    deque.pushLast(2, .Panic);
+    deque.pushFirst(3, .Panic);
 
     // 2 x x x x x 3 1
     // ^           ^
     // tail        head
 
     try expectEqual(8, deque.capacity());
-    _ = try deque.popFirst(); // shrink trigger
+    _ = try deque.popFirst(.Error); // shrink trigger
     try expectEqual(4, deque.capacity());
 
     // 1 2 x x
@@ -522,8 +576,8 @@ test "Allocated DoubleEndedQueue" {
 
     // test grow ('pushFirst') -->
 
-    try deque.pushFirst(3);
-    try deque.pushFirst(4);
+    deque.pushFirst(3, .Panic);
+    deque.pushFirst(4, .Panic);
     try expectEqual(true, deque.isFull());
 
     // 1 2 4 3
@@ -531,7 +585,7 @@ test "Allocated DoubleEndedQueue" {
     //   tail head
 
     try expectEqual(4, deque.capacity());
-    try deque.pushFirst(5); // growth trigger
+    try deque.pushFirst(5, .Error); // growth trigger
     try expectEqual(8, deque.capacity());
 
     // 4 3 1 2 x x 5
@@ -546,8 +600,8 @@ test "Allocated DoubleEndedQueue" {
 
     // test shrink ('popLast') -->
 
-    _ = try deque.popFirst();
-    _ = try deque.popFirst();
+    _ = deque.popFirst(.Panic);
+    _ = deque.popFirst(.Panic);
 
     // x x 3 1 2 x x x
     //     ^   ^.
@@ -556,7 +610,7 @@ test "Allocated DoubleEndedQueue" {
     deque.options.init_capacity = 2;
 
     try expectEqual(8, deque.capacity());
-    _ = try deque.popLast(); // shrink trigger
+    _ = try deque.popLast(.Error); // shrink trigger
     try expectEqual(4, deque.capacity());
 
     // 3 1 x x
@@ -570,8 +624,8 @@ test "Allocated DoubleEndedQueue" {
 
     // test grow ('pushLast') -->
 
-    try deque.pushFirst(4);
-    try deque.pushFirst(5);
+    deque.pushFirst(4, .Panic);
+    deque.pushFirst(5, .Panic);
     try expectEqual(true, deque.isFull());
 
     // 3 1 5 4
@@ -579,7 +633,7 @@ test "Allocated DoubleEndedQueue" {
     //   tail head
 
     try expectEqual(4, deque.capacity());
-    try deque.pushLast(6); // growth trigger
+    try deque.pushLast(6, .Error); // growth trigger
     try expectEqual(8, deque.capacity());
 
     // 5 4 3 1 6 x x x
@@ -596,50 +650,50 @@ test "Allocated DoubleEndedQueue" {
 
     deque.options.growable = false;
 
-    try deque.pushLast(7);
-    try deque.pushLast(8);
-    try deque.pushLast(9);
+    deque.pushLast(7, .Panic);
+    deque.pushLast(8, .Panic);
+    deque.pushLast(9, .Panic);
 
-    try expectError(Error.Overflow, deque.pushLast(10));
+    try expectError(Error.Overflow, deque.pushLast(10, .Error));
 }
 
 test "Buffered DoubleEndedQueue" {
     var buffer: [2]u8 = undefined;
-    var deque = DoubleEndedQueue(u8).initBuffer(&buffer, .{});
+    var deque = DoubleEndedQueue(u8, .Buffer).init(&buffer, .{});
 
     // test general -->
 
     try expectEqual(2, deque.capacity());
     try expectEqual(0, deque.length());
     try expectEqual(true, deque.isEmpty());
-    try expectError(Error.Underflow, deque.popFirst());
-    try expectError(Error.Underflow, deque.popLast());
+    try expectError(Error.Underflow, deque.popFirst(.Error));
+    try expectError(Error.Underflow, deque.popLast(.Error));
     try expectEqual(null, deque.peekFirst());
     try expectEqual(null, deque.peekLast());
     try expectEqual(null, deque.peekIndex(0));
 
-    try deque.pushFirst(1);
-    try deque.pushLast(2);
+    deque.pushFirst(1, .Panic);
+    deque.pushLast(2, .Panic);
 
     try expectEqual(2, deque.length());
     try expectEqual(true, deque.isFull());
-    try expectError(Error.Overflow, deque.pushFirst(3));
-    try expectError(Error.Overflow, deque.pushLast(4));
+    try expectError(Error.Overflow, deque.pushFirst(3, .Error));
+    try expectError(Error.Overflow, deque.pushLast(4, .Error));
 
     try expectEqual(1, deque.peekFirst());
     try expectEqual(2, deque.peekLast());
     try expectEqual(1, deque.peekIndex(0));
     try expectEqual(2, deque.peekIndex(1));
 
-    try expectEqual(1, try deque.popFirst());
-    try expectEqual(2, try deque.popLast());
+    try expectEqual(1, deque.popFirst(.Panic));
+    try expectEqual(2, deque.popLast(.Panic));
 
     try expectEqual(true, deque.isEmpty());
 }
 
 test "Comptime DoubleEndedQueue" {
     comptime {
-        var deque = DoubleEndedQueue(u8).initComptime(.{
+        var deque = DoubleEndedQueue(u8, .Comptime).init(.{
             .init_capacity = 2,
             .growable = false,
             .shrinkable = false,
@@ -650,27 +704,27 @@ test "Comptime DoubleEndedQueue" {
         try expectEqual(2, deque.capacity());
         try expectEqual(0, deque.length());
         try expectEqual(true, deque.isEmpty());
-        try expectError(Error.Underflow, deque.popFirst());
-        try expectError(Error.Underflow, deque.popLast());
+        try expectError(Error.Underflow, deque.popFirst(.Error));
+        try expectError(Error.Underflow, deque.popLast(.Error));
         try expectEqual(null, deque.peekFirst());
         try expectEqual(null, deque.peekLast());
         try expectEqual(null, deque.peekIndex(0));
 
-        try deque.pushFirst(1);
-        try deque.pushLast(2);
+        deque.pushFirst(1, .Panic);
+        deque.pushLast(2, .Panic);
 
         try expectEqual(2, deque.length());
         try expectEqual(true, deque.isFull());
-        try expectError(Error.Overflow, deque.pushFirst(3));
-        try expectError(Error.Overflow, deque.pushLast(4));
+        try expectError(Error.Overflow, deque.pushFirst(3, .Error));
+        try expectError(Error.Overflow, deque.pushLast(4, .Error));
 
         try expectEqual(1, deque.peekFirst());
         try expectEqual(2, deque.peekLast());
         try expectEqual(1, deque.peekIndex(0));
         try expectEqual(2, deque.peekIndex(1));
 
-        try expectEqual(1, try deque.popFirst());
-        try expectEqual(2, try deque.popLast());
+        try expectEqual(1, deque.popFirst(.Panic));
+        try expectEqual(2, deque.popLast(.Panic));
 
         try expectEqual(true, deque.isEmpty());
     }

@@ -13,7 +13,7 @@ pub inline fn assertAndMsg(dictum: bool, comptime fmt: []const u8, args: anytype
     }
 }
 
-/// Assert this function is executed comptime, prints a message mentioning `calling_fn_name`.
+/// Assert this function is executed comptime, prints a message with `calling_fn_name`.
 pub inline fn assertComptime(comptime calling_fn_name: []const u8) void {
     assertAndMsg(
         @inComptime(),

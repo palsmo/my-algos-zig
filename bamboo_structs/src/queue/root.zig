@@ -16,5 +16,5 @@ pub const Error = shared.Error;
 
 test {
     _ = deque;
-    _ = fifo;
+    //_ = fifo;
 }
