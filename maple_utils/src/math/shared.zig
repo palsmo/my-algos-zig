@@ -1,6 +1,6 @@
 //! Author: palsmo
 //! Status: In Progress
 
-pub const Error = error{
+pub const ValueError = error{
     Overflow,
 };

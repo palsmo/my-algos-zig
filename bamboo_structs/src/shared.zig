@@ -1,19 +1,60 @@
 //! Author: palsmo
 //! Status: Done
 //! About: Shared Components Among Data Structures
+//!
+//! Cache Locality Scale:
+//!
+//!  cache loc |
+//! -----------|------------------------------------------------------------------------------------
+//! good       | Contiguous or mostly contiguous memory layout with minimal fragmentation.
+//!            | Example: Well-managed array based structure...
+//!            |
+//! moderate   | Non-contiguous but structured memory layout with some locality.
+//!            | Example: Balanced tree structure, skip list...
+//!            |
+//! poor       | Highly fragmented or scattered memory layout with little locality.
+//!            | Example: Linked list, scattered hash table...
+//! ------------------------------------------------------------------------------------------------
 
-///    type   |                            about
-/// ----------|-------------------------------------------------------------
-/// .Alloc    | - Any memory allocation is done on the heap.
-///           | - User should release memory after use by calling 'deinit'.
-///           | - Dependant Struct is valid only during _runtime_.
+/// Execution modes for functions that support branch optimization.
+///
+///    mode   |                                        about
+/// ----------|-------------------------------------------------------------------------------------
+/// .Safe     | - Contains safety checks that may throw or panic.
+///           | - This is the suggested mode for most situations, allowing for detection and
+///           |   consequential handling of errors.
 ///           |
-/// .Buffer   | - Work with static space in user passed buffer.
-///           | - Certain fields in `options` will always be ignored:
-///           |   _init_capacity_, _growable_ and _shrinkable_.
-///           | - Dependant Struct is valid only during _comptime_ or _runtime_.
+/// .Uncheck  | - Fastest but unsafe, most conditional branches (e.g., safety checks) are pruned
+///           |   to simpler control flows with the downside that undefined behaviors can be hit.
+///           | - If library logging is set _.Verbose_, unsafe scenarios are caught by assertions.
+/// ------------------------------------------------------------------------------------------------
+pub const ExecMode = enum { Safe, Uncheck };
+
+/// Memory modes for data structures that support different memory handling methods.
+///
+///    mode   |                                        about
+/// ----------|-------------------------------------------------------------------------------------
+/// .Alloc    | - Memory allocation is done on the heap, user should release by calling 'deinit'.
+///           | - Valid during _runtime_.
 ///           |
-/// .Comptime | - Any memory allocation is done in .rodata or
-///           |   (if not referenced runtime) compiler's address space.
-///           | - Dependant Struct is valid only during _comptime_.
+/// .Buffer   | - Memory is static and passed as a buffer by the user.
+///           | - Valid during _runtime_ and _comptime_.
+///           |
+/// .Comptime | - Memory allocation is done in .rodata or (if not referenced runtime) compiler's
+///           |   address space.
+///           | - Valid during _comptime_.
+/// ------------------------------------------------------------------------------------------------
 pub const MemoryMode = enum { Alloc, Buffer, Comptime };
+
+///     error    |                                       about
+/// -------------|----------------------------------------------------------------------------------
+/// .Overflow    | - When trying to access space **above** capacity which wouldn't be widened.
+/// .Underflow   | - When trying to access space **below** capacity which wouldn't be widened.
+/// ------------------------------------------------------------------------------------------------
+pub const BufferError = error{ Overflow, Underflow, NotEnoughSpace };
+
+///     error    |
+/// -------------|----------------------------------------------------------------------------------
+/// .OutOfBounds | - When trying to access space outside the indexable memory span.
+/// ------------------------------------------------------------------------------------------------
+pub const IndexError = error{OutOfBounds};

@@ -3,139 +3,13 @@
 
 const std = @import("std");
 
-const maple_debug = @import("../debug/root.zig");
+const mod_assert = @import("../assert/root.zig");
 
-const assertComptime = maple_debug.assertComptime;
+const assertComptime = mod_assert.misc.assertComptime;
+const assertFn = mod_assert.misc.assertFn;
+const assertType = mod_assert.misc.assertType;
 const expectEqual = std.testing.expectEqual;
 const panic = std.debug.panic;
-
-/// Assert that type `T_fn` is of the form: 'fn (`args`...) `T_ret`'.
-/// `args` should be a tuple of expected parameter types (ordered).
-/// `T_ret` is the expected function return type.
-pub fn assertFn(comptime T_fn: type, comptime args: anytype, comptime T_ret: type) void {
-    assertComptime(@src().fn_name);
-
-    // check `T_fn` type
-    const T_fn_info = @typeInfo(T_fn);
-    switch (T_fn_info) {
-        .Fn => {},
-        else => {
-            @compileError(std.fmt.comptimePrint(
-                "Expected function type for `T_fn` argument, found '{s}'",
-                .{@typeName(T_fn)},
-            ));
-        },
-    }
-
-    // check `args` type
-    const T_args = @TypeOf(args);
-    const T_args_info = @typeInfo(T_args);
-    switch (T_args_info) {
-        .Struct => {},
-        else => {
-            @compileError(std.fmt.comptimePrint(
-                "Expected tuple type for `args` argument, found '{s}'",
-                .{@typeName(T_args)},
-            ));
-        },
-    }
-
-    // check number of parameters
-    const params = T_fn_info.Fn.params;
-    if (params.len != T_args_info.Struct.fields.len) {
-        @compileError("Expected same parameter count, found " ++
-            std.fmt.comptimePrint("{d}", .{params.len}) ++ "!=" ++
-            std.fmt.comptimePrint("{d}", .{T_args_info.Struct.fields.len}));
-    }
-
-    // check parameter types
-    inline for (params, 0..) |param, i| {
-        const T_arg_actual = param.type.?;
-        const T_arg: type = if (@TypeOf(args[i]) == type) args[i] else {
-            @compileError(std.fmt.comptimePrint(
-                "Invalid declaration (index {d} `args`), expected type found '{s}'",
-                .{ i, @typeName(@TypeOf(args[i])) },
-            ));
-        };
-        if (T_arg_actual != T_arg) {
-            @compileError(std.fmt.comptimePrint(
-                "Type mismatch for parameter {d}, expected '{s}' found '{s}'",
-                .{ i, @typeName(T_arg), @typeName(T_arg_actual) },
-            ));
-        }
-    }
-
-    // check return type
-    const Ret = T_fn_info.Fn.return_type.?;
-    if (Ret != T_ret) {
-        @compileError(std.fmt.comptimePrint(
-            "Type mismatch for return, expected '{s}' (`T_ret`) found '{s}' (in `T_fn`).",
-            .{ @typeName(T_ret), @typeName(T_fn) },
-        ));
-    }
-}
-
-test assertFn {
-    comptime {
-        const foo_fn_type = fn (a: u32, b: u32) u32;
-        assertFn(foo_fn_type, .{ u32, u32 }, u32);
-
-        // TODO! test compile error case (currently not possible)
-    }
-}
-
-/// Assert that type `T` matches any of `types`.
-/// `types` should be a tuple of 'std.builtin.Type(enum)', example: .{ .Int, .Float }
-/// `tag` is displayed in the fail message, format could be "<calling_function_name>.<param_name>".
-pub fn assertType(comptime T: type, comptime types: anytype, comptime tag: []const u8) void {
-    assertComptime(@src().fn_name);
-
-    const T_types = @TypeOf(types);
-    switch (@typeInfo(T_types)) {
-        .Struct => |info| if (!info.is_tuple) {
-            @compileError(std.fmt.comptimePrint("Expected tuple (`types`), found '{s}'", .{@typeName(T_types)}));
-        },
-        else => {},
-    }
-
-    comptime var types_str: []const u8 = "";
-
-    inline for (types, 0..) |t, i| {
-        // check 't' is enum literal
-        if (@TypeOf(t) != @TypeOf(.enum_literal)) {
-            @compileError(std.fmt.comptimePrint(
-                "Invalid declaration (index {d} `types`), expected enum literal found '{s}'",
-                .{ i, @typeName(@TypeOf(t)) },
-            ));
-        }
-        // check 't' is field of 'std.builtin.Type'
-        if (!@hasField(std.builtin.Type, @tagName(t))) {
-            @compileError(std.fmt.comptimePrint(
-                "Invalid declaration (index {d} `types`), '{s}' is not a member of 'std.builtin.Type'",
-                .{ i, @tagName(t) },
-            ));
-        }
-        // check `T` is kind `t`
-        if (i > 0) types_str = types_str ++ ", ";
-        types_str = types_str ++ "." ++ @tagName(t);
-        if (@typeInfo(T) == t) return;
-    }
-
-    @compileError(std.fmt.comptimePrint(
-        "Type '{s}' (`{s}`) does not match any of .{{s}}",
-        .{ @typeName(T), tag, types_str },
-    ));
-}
-
-test assertType {
-    comptime {
-        const types = .{ .Int, .Bool };
-        assertType(u8, types, "types");
-        assertType(bool, types, "types");
-
-        // TODO! test compile error case (currently not possible)
-    }
-}
 
 /// Verify properties of namespace `ctx` against `decls`.
 /// Useful for handling custom functions provided by the user,
@@ -148,8 +22,8 @@ test assertType {
 /// }
 pub fn verifyContext(comptime ctx: type, comptime decls: anytype) void {
     assertComptime(@src().fn_name);
-    assertType(ctx, .{.Struct}, "verifyContext.ctx");
-    assertType(@TypeOf(decls), .{.Struct}, "verifyContext.decls");
+    assertType(ctx, .{.Struct}, "fn {s}.ctx", .{@src().fn_name});
+    assertType(@TypeOf(decls), .{.Struct}, "fn {s}.decls", .{@src().fn_name});
 
     inline for (decls, 0..) |decl, i| {
 

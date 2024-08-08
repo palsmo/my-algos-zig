@@ -2,7 +2,7 @@
 //! Status: In Progress
 //! About: Maths Library Root
 //!
-//! Computation scale/table:
+//! Computation Scale:
 //!
 //!  computation  |                           examples
 //! --------------|---------------------------------------------------------------
@@ -14,35 +14,43 @@
 //! very heavy    | complex simulations, cryptography, machine learning
 //! ------------------------------------------------------------------------------
 
-const linear = @import("./linear.zig");
-const misc = @import("./misc.zig");
+const _linear = @import("./linear.zig");
+const _misc = @import("./misc.zig");
 const shared = @import("./shared.zig");
 
 // exports -->
 
 // shared
-pub const Error = shared.Error;
+pub const err = struct {
+    pub const ValueError = shared.ValueError;
+};
 
-// misc
-pub const assertPowOf2 = misc.assertPowOf2;
-pub const fastMod = misc.fastMod;
-pub const getPow10 = misc.getPow10;
-pub const isPowOf2 = misc.isPowOf2;
-pub const mulPercent = misc.mulPercent;
-pub const power_of_10_table_float = misc.power_of_10_table_float;
-pub const power_of_10_table_int = misc.power_of_10_table_int;
-pub const wrapDecrement = misc.wrapDecrement;
-pub const wrapIncrement = misc.wrapIncrement;
+// miscellaneous
+pub const misc = struct {
+    pub const fastMod = _misc.fastMod;
+    pub const indexPower10 = _misc.indexPower10;
+    pub const isPowerOf2 = _misc.isPowerOf2;
+    pub const mulPercent = _misc.mulPercent;
+    pub const power_of_10_table_float = _misc.power_of_10_table_float;
+    pub const power_of_10_table_int = _misc.power_of_10_table_int;
+    pub const safeAdd = _misc.safeAdd;
+    pub const safeMul = _misc.safeMul;
+    pub const safeSub = _misc.safeSub;
+    pub const wrapDecrement = _misc.wrapDecrement;
+    pub const wrapIncrement = _misc.wrapIncrement;
+};
 
-// linear
-pub const dot = linear.dot;
-pub const cross = linear.cross;
-pub const norm = linear.norm;
-pub const length = linear.length;
+// linear algebra
+pub const linear = struct {
+    pub const dot = _linear.dot;
+    pub const cross = _linear.cross;
+    pub const norm = _linear.norm;
+    pub const length = _linear.length;
+};
 
 // testing -->
 
 test {
-    _ = linear;
-    _ = misc;
+    //_ = linear;
+    _ = _misc;
 }

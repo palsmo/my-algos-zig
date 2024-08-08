@@ -6,18 +6,19 @@ const panic = std.debug.panic;
 /// Display a formatted message with `fmt` and `args`.
 pub inline fn assertAndMsg(dictum: bool, comptime fmt: []const u8, args: anytype) void {
     if (dictum) return;
-    if (@inComptime()) {
-        @compileError(std.fmt.comptimePrint(fmt, args));
-    } else {
-        panic(fmt, args);
+    switch (@inComptime()) {
+        true => @compileError(std.fmt.comptimePrint(fmt, args)),
+        false => panic(fmt, args),
     }
 }
 
 /// Assert this function is executed comptime, prints a message with `calling_fn_name`.
 pub inline fn assertComptime(comptime calling_fn_name: []const u8) void {
-    assertAndMsg(
-        @inComptime(),
-        "Function '{s}' is invalid runtime (prefix with 'comptime').",
-        .{calling_fn_name},
-    );
+    switch (@inComptime()) {
+        true => {},
+        false => panic(
+            "Function '{s}' is invalid runtime (prefix with 'comptime').",
+            .{calling_fn_name},
+        ),
+    }
 }
