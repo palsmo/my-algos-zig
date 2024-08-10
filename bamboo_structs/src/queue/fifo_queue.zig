@@ -20,26 +20,26 @@ const assertAndMsg = maple.debug.assertAndMsg;
 const assertPowOf2 = maple.math.assertPowOf2;
 
 /// A first-in-first-out queue for items of type `T`.
-/// Provides efficient handling of queuing data.
-/// Shouldn't be used to store sorted items (has potentially non-contiguous memory layout).
-/// Can be useful as event/task queue, message buffer or primitive for other structures.
+/// Useful for event/task queues, primitive for other structures.
+/// Worse for storing sorted items (has potentially non-contiguous memory layout).
 ///
 /// Depending on `memory_mode` certain operations may be pruned or optimized comptime.
-/// Reference to 'self.deque.buffer' may become invalidated after grow/shrink routine,
-/// use 'self.isValidRef' to verify.
+/// Reference to 'self.deque.buffer' may become invalid after resize routine, use 'self.isValidRef' to verify.
 ///
 /// Properties:
 /// Relies on 'DoubleEndedQueue' structure under the hood.
+/// Provides efficient operations at buffer endings.
 ///
 ///  complexity |     best     |   average    |    worst     |                factor
 /// ------------|--------------|--------------|--------------|--------------------------------------
-/// memory idle | O(n)         | O(n)         | O(4n)        | grow/shrink
-/// memory work | O(1)         | O(1)         | O(2)         | grow/shrink
 /// insertion   | O(1)         | O(1)         | O(n)         | grow
 /// deletion    | O(1)         | O(1)         | O(n)         | shrink
 /// lookup      | O(1)         | O(1)         | O(1)         | space saturation
 /// ------------|--------------|--------------|--------------|--------------------------------------
-///  cache loc  | good         | good         | moderate     | usage pattern (wrap)
+/// memory idle | O(n)         | O(n)         | O(4n)        | grow/shrink
+/// memory work | O(1)         | O(1)         | O(2)         | grow/shrink
+/// ------------|--------------|--------------|--------------|--------------------------------------
+///  cache loc  | good         | good         | poor         | usage pattern (wrap)
 /// ------------------------------------------------------------------------------------------------
 pub fn FifoQueue(comptime T: type, comptime memory_mode: MemoryMode) type {
     return struct {
@@ -66,15 +66,9 @@ pub fn FifoQueue(comptime T: type, comptime memory_mode: MemoryMode) type {
         ///
         ///    mode   |                                    about
         /// ----------|-----------------------------------------------------------------------------
-        /// .Alloc    | fn (allocator: Allocator, options: Options) !Self
-        ///           | - Panics when 'options.init\_capacity' is zero or not a power of two.
-        ///           |
-        /// .Buffer   | fn (buf: []T, options: Options) Self
-        ///           | - Panics when 'buf.len' is zero or not a power of two.
-        ///           | - The `options` *init_capacity*, *growable* and *shrinkable* are ignored.
-        ///           |
+        /// .Alloc    | fn (allocator: Allocator, comptime options: Options) !Self
+        /// .Buffer   | fn (buf: []T, comptime options: Options) Self
         /// .Comptime | fn (comptime options: Options) Self
-        ///           | - Panics when 'options.init\_capacity' is zero or not a power of two.
         /// ----------------------------------------------------------------------------------------
         pub const init = switch (memory_mode) {
             .Alloc => initAlloc,
@@ -83,6 +77,9 @@ pub fn FifoQueue(comptime T: type, comptime memory_mode: MemoryMode) type {
         };
 
         /// Initialize the queue for using heap allocation.
+        /// Issue key specs:
+        /// - Panics when 'options.init\_capacity' is zero, or not a power of 2.
+        /// - Throws error when allocation process fail.
         inline fn initAlloc(allocator: Allocator, comptime options: Options) !Self {
             return .{
                 .deque = try DoubleEndedQueue(T, .Alloc).init(allocator, .{
@@ -94,6 +91,8 @@ pub fn FifoQueue(comptime T: type, comptime memory_mode: MemoryMode) type {
         }
 
         /// Initialize the queue for working with user provided `buf`.
+        /// Issue key specs:
+        /// - Panics when 'buf.len' is zero, or not a power of 2.
         inline fn initBuffer(buf: []T, comptime options: Options) Self {
             return .{
                 .deque = DoubleEndedQueue(T, .Buffer).init(buf, .{
@@ -105,6 +104,8 @@ pub fn FifoQueue(comptime T: type, comptime memory_mode: MemoryMode) type {
         }
 
         /// Initialize the queue for using comptime memory allocation.
+        /// Issue key specs:
+        /// - Panics when 'options.init\_capacity' is zero, or not a power of 2.
         inline fn initComptime(comptime options: Options) Self {
             return .{
                 .deque = DoubleEndedQueue(T, .Comptime).init(.{
@@ -116,6 +117,8 @@ pub fn FifoQueue(comptime T: type, comptime memory_mode: MemoryMode) type {
         }
 
         /// Release allocated memory, cleanup routine.
+        /// Issue key specs:
+        /// - Panic (only *.Buffer* and *.Comptime* `memory_mode`).
         pub fn deinit(self: *const Self) void {
             return @call(.always_inline, @TypeOf(self.deque).deinit, .{&self.deque});
         }
@@ -128,7 +131,7 @@ pub fn FifoQueue(comptime T: type, comptime memory_mode: MemoryMode) type {
         /// Store an `item` last in the queue.
         /// Issue key specs:
         /// - Throws error when adding at max capacity with 'self.options.growable' set to false.
-        /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
+        /// - Throws error when allocation process fail (only *.Alloc* `memory_mode`).
         /// Other:
         /// - With *.Uncheck* `exec_mode` the user has manual control over the 'grow' routine.
         pub fn push(self: *Self, item: T, comptime exec_mode: ExecMode) !void {
@@ -140,7 +143,7 @@ pub fn FifoQueue(comptime T: type, comptime memory_mode: MemoryMode) type {
         /// - Throws error when required capacity would overflow *usize*.
         /// - Throws error when queue hasn't enough capacity (only *.Buffer* `memory_mode`).
         /// - Throws error when queue hasn't enough capacity with 'self.options.growable' set to false.
-        /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
+        /// - Throws error when allocation process fail (only *.Alloc* `memory_mode`).
         pub fn pushBatch(self: *Self, items: []const T) !void {
             return @call(.always_inline, @TypeOf(self.deque).pushLastBatch, .{ &self.deque, items });
         }
@@ -152,7 +155,7 @@ pub fn FifoQueue(comptime T: type, comptime memory_mode: MemoryMode) type {
         /// Get the first item in the queue, free its memory.
         /// Issue key specs:
         /// - Throws error when trying to release from empty queue.
-        /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
+        /// - Throws error when allocation process fail (only *.Alloc* `memory_mode`).
         /// Other:
         /// - With *.Uncheck* `exec_mode` the user has manual control over the 'shrink' routine.
         pub fn pop(self: *Self, comptime exec_mode: ExecMode) !T {
@@ -209,9 +212,9 @@ pub fn FifoQueue(comptime T: type, comptime memory_mode: MemoryMode) type {
         pub inline fn isValidRef(self: *const Self, ptr: *const []T) bool {
             return ptr == &self.buffer;
         }
-        /// Reset queue to its empty state.
+        /// Reset the queue to its empty initial state.
         /// Issue key specs:
-        /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
+        /// - Throws error when allocation process fail (only *.Alloc* `memory_mode`).
         pub inline fn reset(self: *Self) !void {
             return @call(.always_inline, @TypeOf(self.deque).reset, .{&self.deque});
         }
@@ -220,7 +223,7 @@ pub fn FifoQueue(comptime T: type, comptime memory_mode: MemoryMode) type {
         /// Issue key specs:
         /// - Panics when 'self.allocator' is *null*.
         /// - Throws error when new capacity would overflow *usize*.
-        /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
+        /// - Throws error when allocation process fail (only *.Alloc* `memory_mode`).
         pub fn grow(self: *Self) !void {
             return @call(.always_inline, @TypeOf(self.deque).grow, .{&self.deque});
         }
@@ -229,7 +232,7 @@ pub fn FifoQueue(comptime T: type, comptime memory_mode: MemoryMode) type {
         /// Issue key specs:
         /// - Panics when 'self.allocator' is *null*.
         /// - Throws error when new capacity wouldn't fit all content in queue.
-        /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
+        /// - Throws error when allocation process fail (only *.Alloc* `memory_mode`).
         pub fn shrink(self: *Self) !void {
             return @call(.always_inline, @TypeOf(self.deque).shrink, .{&self.deque});
         }
@@ -238,7 +241,7 @@ pub fn FifoQueue(comptime T: type, comptime memory_mode: MemoryMode) type {
         /// Issue key specs:
         /// - Panics when 'self.allocator' is *null*.
         /// - Throws error when `new_capacity` wouldn't fit all content in queue.
-        /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
+        /// - Throws error when allocation process fail (only *.Alloc* `memory_mode`).
         pub fn resize(self: *Self) !void {
             return @call(.always_inline, @TypeOf(self.deque).resize, .{&self.deque});
         }

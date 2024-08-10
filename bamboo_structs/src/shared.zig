@@ -9,26 +9,12 @@
 //! good       | Contiguous or mostly contiguous memory layout with minimal fragmentation.
 //!            | Example: Well-managed array based structure...
 //!            |
-//! moderate   | Non-contiguous but structured memory layout with some locality.
+//! decent     | Non-contiguous but structured memory layout with some locality.
 //!            | Example: Balanced tree structure, skip list...
 //!            |
 //! poor       | Highly fragmented or scattered memory layout with little locality.
 //!            | Example: Linked list, scattered hash table...
 //! ------------------------------------------------------------------------------------------------
-
-/// Execution modes for functions that support branch optimization.
-///
-///    mode   |                                        about
-/// ----------|-------------------------------------------------------------------------------------
-/// .Safe     | - Contains safety checks that may throw or panic.
-///           | - This is the suggested mode for most situations, allowing for detection and
-///           |   consequential handling of errors.
-///           |
-/// .Uncheck  | - Fastest but unsafe, most conditional branches (e.g., safety checks) are pruned
-///           |   to simpler control flows with the downside that undefined behaviors can be hit.
-///           | - If library logging is set _.Verbose_, unsafe scenarios are caught by assertions.
-/// ------------------------------------------------------------------------------------------------
-pub const ExecMode = enum { Safe, Uncheck };
 
 /// Memory modes for data structures that support different memory handling methods.
 ///

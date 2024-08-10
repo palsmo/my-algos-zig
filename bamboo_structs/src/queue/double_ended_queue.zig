@@ -23,26 +23,26 @@ const wrapDecrement = maple.math.wrapDecrement;
 const wrapIncrement = maple.math.wrapIncrement;
 
 /// A double-ended queue (deque) for items of type `T`.
-/// Provides efficient insertion, removal and lookup operations - especially at both ends.
-/// Shouldn't be used to store sorted items (has potentially non-contiguous memory layout).
-/// Can be useful as primitive for other structures.
+/// Useful as primitive for other structures.
+/// Worse for storing sorted items (has potentially non-contiguous memory layout).
 ///
 /// Depending on `memory_mode` certain operations may be pruned or optimized comptime.
-/// Reference to 'self.buffer' may become invalidated after grow/shrink routine,
-/// use 'self.isValidRef' to verify.
+/// Reference to 'self.buffer' may become invalid after resize routine, use 'self.isValidRef' to verify.
 ///
 /// Properties:
 /// Uses 'Circular Array' logic under the hood.
+/// Provides efficient operations at buffer endings.
 ///
 ///  complexity |     best     |   average    |    worst     |                factor
 /// ------------|--------------|--------------|--------------|--------------------------------------
-/// memory idle | O(n)         | O(n)         | O(4n)        | grow/shrink
-/// memory work | O(1)         | O(1)         | O(2)         | grow/shrink
 /// insertion   | O(1)         | O(1)         | O(n)         | grow
 /// deletion    | O(1)         | O(1)         | O(n)         | shrink
 /// lookup      | O(1)         | O(1)         | O(1)         | -
 /// ------------|--------------|--------------|--------------|--------------------------------------
-///  cache loc  | good         | good         | moderate     | usage pattern (wrap)
+/// memory idle | O(n)         | O(n)         | O(4n)        | grow/shrink
+/// memory work | O(1)         | O(1)         | O(2)         | grow/shrink
+/// ------------|--------------|--------------|--------------|--------------------------------------
+///  cache loc  | good         | good         | poor         | usage pattern (wrap)
 /// ------------------------------------------------------------------------------------------------
 pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type {
     return struct {
@@ -70,15 +70,9 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         ///
         ///    mode   |                                    about
         /// ----------|-----------------------------------------------------------------------------
-        /// .Alloc    | fn (allocator: Allocator, options: Options) !Self
-        ///           | - Panics when 'options.init\_capacity' is zero or not a power of two.
-        ///           |
-        /// .Buffer   | fn (buf: []T, options: Options) Self
-        ///           | - Panics when 'buf.len' is zero or not a power of two.
-        ///           | - The `options` *init_capacity*, *growable* and *shrinkable* are ignored.
-        ///           |
+        /// .Alloc    | fn (allocator: Allocator, comptime options: Options) !Self
+        /// .Buffer   | fn (buf: []T, comptime options: Options) Self
         /// .Comptime | fn (comptime options: Options) Self
-        ///           | - Panics when 'options.init\_capacity' is zero or not a power of two.
         /// ----------------------------------------------------------------------------------------
         pub const init = switch (memory_mode) {
             .Alloc => initAlloc,
@@ -87,6 +81,9 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         };
 
         /// Initialize the queue for using heap allocation.
+        /// Issue key specs:
+        /// - Panics when 'options.init\_capacity' is zero, or not a power of 2.
+        /// - Throws error when allocation process fail.
         inline fn initAlloc(allocator: Allocator, comptime options: Options) !Self {
             comptime assertAndMsg(options.init_capacity > 0, "Can't initialize with zero size.", .{});
             comptime assertPowerOf2(options.init_capacity);
@@ -99,6 +96,8 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         }
 
         /// Initialize the queue for working with user provided `buf`.
+        /// Issue key specs:
+        /// - Panics when 'buf.len' is zero, or not a power of 2.
         inline fn initBuffer(buf: []T, comptime options: Options) Self {
             assertAndMsg(buf.len > 0, "Can't initialize with zero size.", .{});
             assertPowerOf2(buf.len);
@@ -108,7 +107,7 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
             return .{
                 .buffer = buf,
                 .options = .{
-                    .init_capacity = 0, // * can't set `buf.len` since not always comptime, doesn't impact flow
+                    .init_capacity = 0, // * can't set `buf.len`, not comptime guaranteed, doesn't impact flow
                     .growable = false,
                     .shrinkable = false,
                 },
@@ -117,6 +116,8 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         }
 
         /// Initialize the queue for using comptime memory allocation.
+        /// Issue key specs:
+        /// - Panics when 'options.init\_capacity' is zero, or not a power of 2.
         inline fn initComptime(comptime options: Options) Self {
             assertComptime(@src().fn_name);
             assertAndMsg(options.init_capacity > 0, "Can't initialize with zero size.", .{});
@@ -138,14 +139,43 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         pub fn deinit(self: *const Self) void {
             switch (memory_mode) {
                 .Alloc => {
-                    assertAndMsg(self.allocator != null, "Passed allocator was unexpectedly 'null'.", .{});
                     const ally = self.allocator orelse unreachable;
                     ally.free(self.buffer);
                 },
                 .Buffer, .Comptime => {
-                    @compileError("Can't release array since it's not allocated on the heap (remove call 'deinit').";
+                    @compileError("Can't release, queue is not allocated on the heap (remove call 'deinit').");
                 },
             }
+        }
+
+        /// Get current amount of 'T' that's buffered in the queue.
+        /// Time - O(1), direct value access.
+        pub inline fn capacity(self: *const Self) usize {
+            return self.buffer.len;
+        }
+
+        /// Get current amount of 'T' that's occupying the queue.
+        /// Time - O(1), direct value access.
+        pub inline fn length(self: *const Self) usize {
+            return self.size;
+        }
+
+        /// Check if the queue is empty.
+        /// Time - O(1), direct value access.
+        pub inline fn isEmpty(self: *const Self) bool {
+            return self.size == 0;
+        }
+
+        /// Check if the queue is full.
+        /// Time - O(1), direct value access.
+        pub inline fn isFull(self: *const Self) bool {
+            return self.size == self.buffer.len;
+        }
+
+        /// Check if `ptr` holds the address of the current 'self.buffer'.
+        /// Time - O(1), direct value access.
+        pub inline fn isValidRef(self: *const Self, ptr: *const []T) bool {
+            return ptr == &self.buffer;
         }
 
         /// Identical to 'pushFirst' but guaranteed to be inlined.
@@ -154,9 +184,10 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         }
 
         /// Store an `item` first in the queue.
+        /// Time - O(1)/O(n), wrap decrement to new slot, may grow.
         /// Issue key specs:
         /// - Throws error when adding at max capacity with 'self.options.growable' set to false.
-        /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
+        /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
         /// Other:
         /// - User has manual control over the 'grow' routine (only *.Uncheck* `exec_mode`).
         pub fn pushFirst(self: *Self, item: T, comptime exec_mode: ExecMode) !void {
@@ -169,7 +200,9 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
                     true => {},
                     false => switch (memory_mode) {
                         .Buffer => return BufferError.Overflow,
-                        .Alloc, .Comptime => if (self.options.growable) try self.grow() else return BufferError.Overflow,
+                        .Alloc, .Comptime => if (self.options.growable) try self.grow() else {
+                            return BufferError.Overflow;
+                        },
                     },
                 },
             }
@@ -186,11 +219,11 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         }
 
         /// Store all `items` first in the queue.
+        /// Time - O(1)/O(n).
         /// Issue key specs:
         /// - Throws error when required capacity would overflow *usize*.
-        /// - Throws error when queue hasn't enough capacity (only *.Buffer* `memory_mode`).
         /// - Throws error when queue hasn't enough capacity with 'self.options.growable' set to false.
-        /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
+        /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
         pub fn pushFirstBatch(self: *Self, items: []const T) !void {
             if (memory_mode == .Comptime) assertComptime(@src().fn_name);
             if (items.len == 0) return;
@@ -206,7 +239,7 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
                         true => {
                             // calc how many times to double/grow the size
                             var n = required_capacity / (self.buffer.len + 1); // * avoids extra grow routines when same
-                            if (required_capacity >
+                            //if (required_capacity >
                             while (n > 0) : (n -= 1) try self.grow();
                         },
                     },
@@ -236,9 +269,10 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         }
 
         /// Store an `item` last in the queue.
+        /// Time - O(1)/O(n), wrap increment to new slot, may grow.
         /// Issue key specs:
         /// - Throws error when adding at max capacity with 'self.options.growable' set to false.
-        /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
+        /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
         /// Other:
         /// - User has manual control over the 'grow' routine (only *.Uncheck* `exec_mode`).
         pub fn pushLast(self: *Self, item: T, comptime exec_mode: ExecMode) !void {
@@ -251,7 +285,9 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
                     true => {},
                     false => switch (memory_mode) {
                         .Buffer => return BufferError.Overflow,
-                        .Alloc, .Comptime => if (self.options.growable) try self.grow() else return BufferError.Overflow,
+                        .Alloc, .Comptime => if (self.options.growable) try self.grow() else {
+                            return BufferError.Overflow;
+                        },
                     },
                 },
             }
@@ -268,11 +304,11 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         }
 
         /// Store all `items` last in the queue.
+        /// Time - O(1)/O(n).
         /// Issue key specs:
         /// - Throws error when required capacity would overflow *usize*.
-        /// - Throws error when queue hasn't enough capacity (only *.Buffer* `memory_mode`).
         /// - Throws error when queue hasn't enough capacity with 'self.options.growable' set to false.
-        /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
+        /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
         pub fn pushLastBatch(self: *Self, items: []const T) !void {
             if (memory_mode == .Comptime) assertComptime(@src().fn_name);
             if (items.len == 0) return;
@@ -312,23 +348,24 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         }
 
         /// Identical to 'popFirst' but guaranteed to be inlined.
-        pub inline fn popFirstInline(self: *Self, comptime exec_mode: ExecMode) !T {
+        pub inline fn popFirstInline(self: *Self, comptime exec_mode: ExecMode) ?T {
             return try @call(.always_inline, popFirst, .{ self, exec_mode });
         }
 
         /// Get the first item in the queue, free its memory.
+        /// Time - O(1)/O(n), wrap increment to prev slot, may shrink.
         /// Issue key specs:
-        /// - Throws error when trying to release from empty queue.
-        /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
+        /// - Undefined behavior when queue is empty (only *.Uncheck* `exec_mode`).
+        /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
         /// Other:
         /// - User has manual control over the 'shrink' routine (only *.Uncheck* `exec_mode`).
-        pub fn popFirst(self: *Self, comptime exec_mode: ExecMode) !T {
+        pub fn popFirst(self: *Self, comptime exec_mode: ExecMode) ?T {
             if (memory_mode == .Comptime) assertComptime(@src().fn_name);
 
             // check empty
             switch (exec_mode) {
                 .Uncheck => {}, // TODO! Add logging in verbose mode to warn about this.
-                .Safe => if (self.size != 0) {} else return BufferError.Underflow,
+                .Safe => if (self.size != 0) {} else return null,
             }
 
             const item = self.buffer[self.head];
@@ -347,39 +384,42 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
                     .Buffer => {},
                     .Alloc, .Comptime => switch (self.options.shrinkable) {
                         false => {},
-                        true => if (self.size >= self.options.init_capacity and self.size <= self.buffer.len / 4) {
-                            try self.shrink();
+                        true => {
+                            const a = self.size >= self.options.init_capacity;
+                            const b = self.size <= self.buffer.len / 4;
+                            if (a and b) try self.shrink();
                         },
                     },
                 },
             }
 
-            // release item
             return item;
         }
 
         /// Identical to 'popLast' but guaranteed to be inlined.
-        pub inline fn popLastInline(self: *Self, comptime exec_mode: ExecMode) !T {
+        pub inline fn popLastInline(self: *Self, comptime exec_mode: ExecMode) ?T {
             return try @call(.always_inline, popLast, .{ self, exec_mode });
         }
 
         /// Get the last item in the queue, free its memory.
+        /// Time - O(1)/O(n), wrap decrement to prev slot, may shrink.
         /// Issue key specs:
-        /// - Throws error when trying to release from empty queue.
-        /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
+        /// - Undefined behavior when queue is empty (only *.Uncheck* `exec_mode`).
+        /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
         /// Other:
         /// - User has manual control over the 'shrink' routine (only *.Uncheck* `exec_mode`).
-        pub fn popLast(self: *Self, comptime exec_mode: ExecMode) !T {
+        pub fn popLast(self: *Self, comptime exec_mode: ExecMode) ?T {
             if (memory_mode == .Comptime) assertComptime(@src().fn_name);
 
             // check empty
             switch (exec_mode) {
                 .Uncheck => {}, // TODO! Add logging in verbose mode to warn about this.
-                .Safe => if (self.size != 0) {} else return BufferError.Underflow,
+                .Safe => if (self.size != 0) {} else return null,
             }
 
-            // update tail position
             const item = self.buffer[self.tail];
+
+            // update tail position
             if (self.size > 1) {
                 self.tail = wrapDecrement(usize, self.tail, 0, self.buffer.len);
             } else {} // * skip decrement, `tail` already points to valid slot
@@ -400,7 +440,6 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
                 },
             }
 
-            // release item
             return item;
         }
 
@@ -410,8 +449,9 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         }
 
         /// Get the first item in the queue.
-        /// Issue key specs:
-        /// - Returns *null* only if queue is empty.
+        /// Time - O(1), direct indexing.
+        /// Other:
+        /// - Undefined behavior when queue is empty (only *.Uncheck* `exec_mode`).
         pub fn peekFirst(self: *const Self, comptime exec_mode: ExecMode) ?T {
             switch (exec_mode) {
                 .Uncheck => {}, // TODO! Add logging in verbose mode to warn about this.
@@ -426,8 +466,9 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         }
 
         /// Get the last item in the queue.
+        /// Time - O(1), direct indexing.
         /// Issue key specs:
-        /// - Returns *null* if queue is empty (only *.Safe* `exec_mode`).
+        /// - Undefined behavior when queue is empty (only *.Uncheck* `exec_mode`).
         pub fn peekLast(self: *const Self, comptime exec_mode: ExecMode) ?T {
             switch (exec_mode) {
                 .Uncheck => {}, // TODO! Add logging in verbose mode to warn about this.
@@ -442,8 +483,9 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         }
 
         /// Get an item at index `index` in the queue.
+        /// Time - O(1), calc direct indexing.
         /// Issue key specs:
-        /// - Throws error if `index` is out of bounds of 'self.length()' (only *.Safe* `exec_mode`).
+        /// - Throws error when `index` is out of bounds of 'self.length()' (only *.Safe* `exec_mode`).
         pub fn peekIndex(self: *const Self, index: usize, comptime exec_mode: ExecMode) !T {
             switch (exec_mode) {
                 .Uncheck => {}, // TODO! Add logging in verbose mode to warn about this.
@@ -454,50 +496,56 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
             return self.buffer[actual_index];
         }
 
-        /// Get current amount of 'T' that's buffered in the queue.
-        pub inline fn capacity(self: *const Self) usize {
-            return self.buffer.len;
-        }
+        /// Load content of `buf` into list at `side`.
+        /// Time - O(n).
+        /// Issue keys specs:
+        /// - Throws error when required capacity would overflow *usize*.
+        /// - Throws error when queue hasn't enough capacity with 'self.options.growable' *false*.
+        /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
+        pub fn stock(self: *Self, buf: []T, comptime side: enum { Before, After }) !void {
+            _ = side;
 
-        /// Get current amount of 'T' that's occupying the queue.
-        pub inline fn length(self: *const Self) usize {
-            return self.size;
-        }
-
-        /// Check if the queue is empty.
-        pub inline fn isEmpty(self: *const Self) bool {
-            return self.size == 0;
-        }
-
-        /// Check if the queue is full.
-        pub inline fn isFull(self: *const Self) bool {
-            return self.size == self.buffer.len;
-        }
-
-        /// Check if `ptr` holds the address of the current 'self.buffer'.
-        pub inline fn isValidRef(self: *const Self, ptr: *const []T) bool {
-            return ptr == &self.buffer;
-        }
-
-        /// Reset queue to its empty state.
-        /// Issue key specs:
-        /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
-        pub fn reset(self: *Self) !void {
             if (memory_mode == .Comptime) assertComptime(@src().fn_name);
 
+            const required_capacity = try maple.math.safeAdd(usize, self.size, buf.len);
+
+            // grow?
+            if (required_capacity <= self.buffer.len) {
+                switch (memory_mode) {
+                    .Buffer => BufferError.NotEnoughSpace,
+                    .Alloc, .Comptime => switch (self.options.growable) {
+                        false => BufferError.NotEnoughSpace,
+                        true => while (true) {
+                            // TODO! This should be resize instead.
+                            try self.grow();
+                            if (required_capacity <= self.buffer.len) return;
+                        },
+                    },
+                }
+            }
+        }
+
+        /// Reset the queue to its empty initial state.
+        /// Time - O(1), fixed writes, may memory release + memory alloc.
+        /// Issue key specs:
+        /// - Throws error when allocation process fail (only *.Alloc* `memory_mode`).
+        pub fn reset(self: *Self) !void {
             // may allocate new buffer with 'self.init_capacity'
             switch (memory_mode) {
                 .Buffer => {},
                 .Alloc => {
                     if (self.buffer.len != self.options.init_capacity) {
-                        assertAndMsg(self.allocator != null, "Passed allocator was unexpectedly 'null'.", .{});
+                        // allocate new buffer with 'self.init_capacity'
                         const ally = self.allocator orelse unreachable;
                         ally.free(self.buffer);
                         self.buffer = try ally.alloc(T, self.options.init_capacity);
                     }
                 },
                 .Comptime => { // * not free-after-use, compiler promotes
+                    assertComptime(@src().fn_name);
                     if (self.buffer.len != self.options.init_capacity) {
+                        // allocate new buffer with 'self.init_capacity'
+                        // * not free-after-use, compiler promotes
                         var buf: [self.options.init_capacity]T = undefined;
                         self.buffer = &buf;
                     }
@@ -510,44 +558,42 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         }
 
         /// Copy over current content into new buffer of **twice** the size.
+        /// Time - O(n), clone content.
         /// Issue key specs:
         /// - Throws error when new capacity would overflow *usize*.
-        /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
+        /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
         pub fn grow(self: *Self) !void {
             const new_capacity = try maple.math.safeMul(usize, self.buffer.len, 2);
             try self.resize(new_capacity, .After);
         }
 
         /// Copy over current content into new buffer of **half** the size.
+        /// Time - O(n), clone content.
         /// Issue key specs:
         /// - Throws error when new capacity wouldn't fit all content in queue.
-        /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
+        /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
         pub fn shrink(self: *Self) !void {
             const new_capacity = self.buffer.len / 2;
             try self.resize(new_capacity, .After);
         }
 
         /// Copy over current content into new buffer of size `new_capacity`.
+        /// Time - O(n), clone content.
         /// Issue key specs:
         /// - Throws error when `new_capacity` wouldn't fit all content in queue.
-        /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
+        /// - Throws error when allocation process fail (only *.Alloc* `memory_mode`).
         pub fn resize(self: *Self, new_capacity: usize, comptime side: enum { Before, After }) !void {
-            switch (memory_mode) {
-                .Buffer => @compileError("Can't resize space of static buffer."),
-                .Alloc => assertAndMsg(self.allocator != null, "Passed allocator was unexpectedly 'null'.", .{}),
-                .Comptime => assertComptime(@src().fn_name),
-            }
-
-            assertPowOf2(new_capacity);
             if (new_capacity < self.size) return BufferError.NotEnoughSpace;
+            assertPowerOf2(new_capacity);
 
             const new_buffer = switch (memory_mode) {
-                .Buffer => unreachable,
+                .Buffer => @compileError("Can't resize space of static buffer."),
                 .Alloc => {
                     const ally = self.allocator orelse unreachable;
                     try ally.alloc(T, new_capacity);
                 },
                 .Comptime => b: { // * not free-after-use, compiler promotes
+                    assertComptime(@src().fn_name);
                     var buf: [new_capacity]T = undefined;
                     break :b &buf;
                 },

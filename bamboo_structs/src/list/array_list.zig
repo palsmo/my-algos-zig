@@ -14,30 +14,29 @@ const BufferError = mod_shared.BufferError;
 const IndexError = mod_shared.IndexError;
 const ExecMode = mod_shared.ExecMode;
 const MemoryMode = mod_shared.MemoryMode;
-const assert = std.debug.assert;
-const assertAndMsg = maple.debug.assertAndMsg;
-const assertComptime = maple.debug.assertComptime;
-const assertPowOf2 = maple.math.assertPowOf2;
+const assertAndMsg = maple.assert.assertAndMsg;
+const assertComptime = maple.assert.assertComptime;
+const assertPowerOf2 = maple.assert.assertPowerOf2;
 const panic = std.debug.panic;
 
 /// An array list for items of type `T`.
-/// Provides efficient handling of grouped items.
-/// Shouldn't be used when insertion and deletion is frequently needed at the beginning.
-/// Can be useful for storing sorted data (has continguous memory layout) or primitive for other structures.
+/// Useful for storing sorted data due to the contiguous memory layout.
+/// Worse for frequent insertions/deletions at the beginning (triggers whole copy).
 ///
 /// Depending on `memory_mode` certain operations may be pruned or optimized comptime.
-/// Reference to 'self.buffer' may become invalidated after grow/shrink routine,
-/// use 'self.isValidRef' to verify.
+/// Reference to 'self.buffer' may become invalid after grow/shrink routine, use 'self.isValidRef' to verify.
 ///
 /// Properties:
+/// Provides efficient handling of grouped items.
 ///
 ///  complexity |     best     |   average    |    worst     |                factor
 /// ------------|--------------|--------------|--------------|--------------------------------------
-/// memory idle | O(n)         | O(n)         | O(4n)        | grow/shrink
-/// memory work | O(1)         | O(1)         | O(2)         | grow/shrink
-/// insertion   | O(1)         | O(1)         | O(n)         | grow
-/// deletion    | O(1)         | O(n)/O(1)    | O(2n)/O(n)   | preserve_order/fast_unorder, shrink
+/// insertion   | O(1)         | O(1)         | O(n)         | resize
+/// deletion    | O(1)         | O(1)/O(n)    | O(n)/O(2n)   | fast_unorder/preserve_order, resize
 /// lookup      | O(1)         | O(1)         | O(1)         | -
+/// ------------|--------------|--------------|--------------|--------------------------------------
+/// memory idle | O(n)         | O(n)         | O(4n)        | resize
+/// memory work | O(1)         | O(1)         | O(2)         | resize
 /// ------------|--------------|--------------|--------------|--------------------------------------
 ///  cache loc  | good         | good         | good         | -
 /// ------------------------------------------------------------------------------------------------
@@ -46,11 +45,11 @@ pub fn ArrayList(comptime T: type, comptime memory_mode: MemoryMode) type {
         const Self = @This();
 
         pub const Options = struct {
-            // initial capacity of the queue, asserted to be a power of 2 (efficiency reasons)
+            // initial capacity of the list, asserted to be a power of 2 (efficiency reasons)
             init_capacity: usize = 32,
-            // whether the queue can grow beyond `init_capacity`
+            // whether the list can grow beyond `init_capacity`
             growable: bool = true,
-            // whether the queue can shrink when grown past `init_capacity`,
+            // whether the list can shrink when grown past `init_capacity`,
             // will half when size used falls below 1/4 of capacity
             shrinkable: bool = true,
         };
@@ -61,20 +60,13 @@ pub fn ArrayList(comptime T: type, comptime memory_mode: MemoryMode) type {
         options: Options,
         allocator: ?Allocator,
 
-        /// Initialize the queue with the active `memory_mode` branch (read more _MemoryMode_).
+        /// Initialize the list with the active `memory_mode` branch (read more *MemoryMode*).
         ///
         ///    mode   |                                    about
         /// ----------|-----------------------------------------------------------------------------
-        /// .Alloc    | - fn (allocator: Allocator, options: Options) !Self
-        ///           | - Panics when 'options.init\_capacity' is zero.
-        ///           | - Throws error as part of an allocation process.
-        ///           |
-        /// .Buffer   | - fn (buf: []T, options: Options) Self
-        ///           | - Panics when 'buf.len' is zero.
-        ///           | - The `options` _init\_capacity_, _growable_ and _shrinkable_ are ignored.
-        ///           |
-        /// .Comptime | - fn (comptime options: Options) Self
-        ///           | - Panics when 'options.init\_capacity' is zero.
+        /// .Alloc    | fn (allocator: Allocator, comptime options: Options) !Self
+        /// .Buffer   | fn (buf: []T, comptime options: Options) Self
+        /// .Comptime | fn (comptime options: Options) Self
         /// ----------------------------------------------------------------------------------------
         pub const init = switch (memory_mode) {
             .Alloc => initAlloc,
@@ -82,7 +74,10 @@ pub fn ArrayList(comptime T: type, comptime memory_mode: MemoryMode) type {
             .Comptime => initComptime,
         };
 
-        /// Initialize the queue for using heap allocation.
+        /// Initialize the list for using heap allocation.
+        /// Issue key specs:
+        /// - Panics when 'options.init\_capacity' is zero.
+        /// - Throws error as part of an allocation process.
         inline fn initAlloc(allocator: Allocator, comptime options: Options) !Self {
             comptime assertAndMsg(options.init_capacity > 0, "Can't initialize with zero size.", .{});
 
@@ -93,7 +88,9 @@ pub fn ArrayList(comptime T: type, comptime memory_mode: MemoryMode) type {
             };
         }
 
-        /// Initialize the queue for working with user provided `buf`.
+        /// Initialize the list for working with user provided `buf`.
+        /// Issue key specs:
+        /// - Panics when 'buf.len' is zero.
         inline fn initBuffer(buf: []T, comptime options: Options) Self {
             assertAndMsg(buf.len > 0, "Can't initialize with zero size.", .{});
 
@@ -110,7 +107,9 @@ pub fn ArrayList(comptime T: type, comptime memory_mode: MemoryMode) type {
             };
         }
 
-        /// Initialize the queue for using comptime memory allocation.
+        /// Initialize the list for using comptime memory allocation.
+        /// Issue key specs:
+        /// - Panics when 'options.init\_capacity' is zero.
         inline fn initComptime(comptime options: Options) Self {
             assertComptime(@src().fn_name);
             assertAndMsg(options.init_capacity > 0, "Can't initialize with zero size.", .{});
@@ -131,14 +130,38 @@ pub fn ArrayList(comptime T: type, comptime memory_mode: MemoryMode) type {
         pub fn deinit(self: *const Self) void {
             switch (memory_mode) {
                 .Alloc => {
-                    assertAndMsg(self.allocator != null, "Passed allocator was unexpectedly 'null'.", .{});
                     const ally = self.allocator orelse unreachable;
                     ally.free(self.buffer);
                 },
                 .Buffer, .Comptime => {
-                    @compileError("The queue is not allocated on the heap, remove unnecessary call 'deinit'");
+                    @compileError("Can't release, array is not allocated on the heap (remove call 'deinit').");
                 },
             }
+        }
+
+        /// Get current amount of 'T' that's buffered in the list.
+        pub inline fn capacity(self: *const Self) usize {
+            return self.buffer.len;
+        }
+
+        /// Get current amount of 'T' that's occupying the list.
+        pub inline fn length(self: *const Self) usize {
+            return self.size;
+        }
+
+        /// Check if the list is empty.
+        pub inline fn isEmpty(self: *const Self) bool {
+            return self.size == 0;
+        }
+
+        /// Check if the list is full.
+        pub inline fn isFull(self: *const Self) bool {
+            return self.size == &self.buffer.len;
+        }
+
+        /// Check if `ptr` holds the address of the current 'self.buffer'.
+        pub inline fn isValidRef(self: *const Self, ptr: *const []T) bool {
+            return ptr == &self.buffer;
         }
 
         /// Store an `item` last in the list.
@@ -147,17 +170,19 @@ pub fn ArrayList(comptime T: type, comptime memory_mode: MemoryMode) type {
         /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
         /// Other:
         /// - With *.Uncheck* `exec_mode` the user has manual control over the 'grow' routine.
-        pub fn append(self: *Self, item: T, comptime exec_mode: ExecMode) !void {
+        pub fn pushLast(self: *Self, item: T, comptime exec_mode: ExecMode) !void {
             if (memory_mode == .Comptime) assertComptime(@src().fn_name);
 
-            // capacity check and grow?
+            // grow?
             switch (exec_mode) {
                 .Uncheck => {}, // TODO! Add logging in verbose mode to warn about this.
                 .Safe => switch (self.size < self.buffer.len) {
                     true => {},
                     false => switch (memory_mode) {
                         .Buffer => return BufferError.Overflow,
-                        .Alloc, .Comptime => if (self.options.growable) try self.grow() else return BufferError.Overflow,
+                        .Alloc, .Comptime => if (self.options.growable) try self.grow() else {
+                            return BufferError.Overflow;
+                        },
                     },
                 },
             }
@@ -165,10 +190,9 @@ pub fn ArrayList(comptime T: type, comptime memory_mode: MemoryMode) type {
             // add item and update size
             self.buffer[self.size] = item;
             self.size += 1;
-            remove(3, .PreserveOrder, .Safe);
         }
 
-        /// Delete an item at `index` from the list.
+        /// Get an item at `index` from the list, free its memory.
         /// Issue key specs:
         /// - Throws error when trying to release from empty list.
         /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
@@ -176,7 +200,7 @@ pub fn ArrayList(comptime T: type, comptime memory_mode: MemoryMode) type {
         /// - User ensure list size is not zero (only *.Uncheck* `exec_mode`).
         /// - User ensure list size is greater than `index` (only *.Uncheck* `exec_mode`).
         /// - User has manual control over the 'shrink' routine (only *.Uncheck* `exec_mode`).
-        pub fn remove(
+        pub fn popIndex(
             self: *Self,
             index: usize,
             comptime mode: enum { PreserveOrder, FastUnorder },
@@ -217,24 +241,25 @@ pub fn ArrayList(comptime T: type, comptime memory_mode: MemoryMode) type {
                 .Uncheck => {}, // TODO! Add logging in verbose mode to warn about this.
                 .Safe => switch (memory_mode) {
                     .Buffer => {},
-                    .Alloc, .Comptime => {
-                        if (self.options.shrinkable) {
-                            if (self.size >= self.options.init_capacity and self.size <= self.buffer.len / 4) {
-                                try self.shrink();
-                            }
-                        }
+                    .Alloc, .Comptime => switch (self.options.shrinkable) {
+                        false => {},
+                        true => {
+                            const a = self.size >= self.options.init_capacity;
+                            const b = self.size <= self.buffer.len / 4;
+                            if (a and b) try self.shrink();
+                        },
                     },
                 },
             }
         }
 
-        /// Attach `buf` to the list.
-        // Issue key specs:
-        // - Throws error when required capacity would overflow *usize*.
-        // - Throws error when list hasn't enough capacity (only *.Buffer* `memory_mode`).
-        // - Throws error when list hasn't enough capacity with 'self.options.growable' set to false.
-        // - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
-        pub fn concat(self: *Self, buf: []T, comptime side: enum { Before, After }) !void {
+        /// Load content of `buf` into list at `side`.
+        /// Issue key specs:
+        /// - Throws error when required capacity would overflow *usize*.
+        /// - Throws error when list hasn't enough capacity (only *.Buffer* `memory_mode`).
+        /// - Throws error when list hasn't enough capacity with 'self.options.growable' *false*.
+        /// - Throws error when allocation process fail (only *.Alloc* `memory_mode`).
+        pub fn stock(self: *Self, buf: []T, comptime side: enum { Before, After }) !void {
             _ = side;
 
             if (memory_mode == .Comptime) assertComptime(@src().fn_name);
@@ -248,6 +273,7 @@ pub fn ArrayList(comptime T: type, comptime memory_mode: MemoryMode) type {
                     .Alloc, .Comptime => switch (self.options.growable) {
                         false => BufferError.NotEnoughSpace,
                         true => while (true) {
+                            // TODO! This should be resize instead.
                             try self.grow();
                             if (required_capacity <= self.buffer.len) return;
                         },
@@ -256,50 +282,25 @@ pub fn ArrayList(comptime T: type, comptime memory_mode: MemoryMode) type {
             }
         }
 
-        /// Get current amount of 'T' that's buffered in the list.
-        pub inline fn capacity(self: *const Self) usize {
-            return self.buffer.len;
-        }
-
-        /// Get current amount of 'T' that's occupying the list.
-        pub inline fn length(self: *const Self) usize {
-            return self.size;
-        }
-
-        /// Check if the list is empty.
-        pub inline fn isEmpty(self: *const Self) bool {
-            return self.size == 0;
-        }
-
-        /// Check if the list is full.
-        pub inline fn isFull(self: *const Self) bool {
-            return self.size == &self.buffer.len;
-        }
-
-        /// Check if `ptr` holds the address of the current 'self.buffer'.
-        pub inline fn isValidRef(self: *const Self, ptr: *const []T) bool {
-            return ptr == &self.buffer;
-        }
-
-        /// Reset list to its empty state.
+        /// Reset list to its empty initial state.
         /// Issue key specs:
-        /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
+        /// - Throws error when allocation process fail (only *.Alloc* `memory_mode`).
         pub fn reset(self: *Self) !void {
-            if (memory_mode == .Comptime) assertComptime(@src().fn_name);
-
-            // may allocate new buffer with 'self.init_capacity'
             switch (memory_mode) {
                 .Buffer => {},
                 .Alloc => {
                     if (self.buffer.len != self.options.init_capacity) {
-                        assertAndMsg(self.allocator != null, "Passed allocator was unexpectedly 'null'.", .{});
+                        // allocate new buffer with 'self.init_capacity'
                         const ally = self.allocator orelse unreachable;
                         ally.free(self.buffer);
                         self.buffer = try ally.alloc(T, self.options.init_capacity);
                     }
                 },
-                .Comptime => { // * not free-after-use, compiler promotes
+                .Comptime => {
+                    assertComptime(@src().fn_name);
                     if (self.buffer.len != self.options.init_capacity) {
+                        // allocate new buffer with 'self.init_capacity'
+                        // * not free-after-use, compiler promotes
                         var buf: [self.options.init_capacity]T = undefined;
                         self.buffer = &buf;
                     }
@@ -320,7 +321,7 @@ pub fn ArrayList(comptime T: type, comptime memory_mode: MemoryMode) type {
 
         /// Copy over current content into new buffer of **half** the size.
         /// Issue key specs:
-        /// - Throws error when new capacity wouldn't fit all content in queue.
+        /// - Throws error when new capacity wouldn't fit all content in list.
         /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
         pub fn shrink(self: *Self) !void {
             const new_capacity = self.buffer.len / 2;
@@ -329,25 +330,20 @@ pub fn ArrayList(comptime T: type, comptime memory_mode: MemoryMode) type {
 
         /// Copy over current content into new buffer of size `new_capacity`.
         /// Issue key specs:
-        /// - Throws error when `new_capacity` wouldn't fit all content in queue.
+        /// - Throws error when `new_capacity` wouldn't fit all content in list.
         /// - Throws error on failed allocation process (only *.Alloc* `memory_mode`).
         pub fn resize(self: *Self, new_capacity: usize) !void {
-            switch (memory_mode) {
-                .Buffer => @compileError("Can't resize space of static buffer."),
-                .Alloc => assertAndMsg(self.allocator != null, "Passed allocator was unexpectedly 'null'.", .{}),
-                .Comptime => assertComptime(@src().fn_name),
-            }
-
-            assertPowOf2(new_capacity);
             if (new_capacity < self.size) return BufferError.NotEnoughSpace;
+            assertPowerOf2(new_capacity);
 
             const new_buffer = switch (memory_mode) {
-                .Buffer => unreachable,
+                .Buffer => @compileError("Can't resize space of static buffer."),
                 .Alloc => {
                     const ally = self.allocator orelse unreachable;
                     try ally.alloc(T, new_capacity);
                 },
                 .Comptime => b: { // * not free-after-use, compiler promotes
+                    assertComptime(@src().fn_name);
                     var buf: [new_capacity]T = undefined;
                     break :b &buf;
                 },

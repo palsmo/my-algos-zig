@@ -1,5 +1,6 @@
 //! Author: palsmo
 //! Status: In Progress
+//! About: Robin Hood Hash Map Data Structure
 //! Read: https://en.wikipedia.org/wiki/Hash_table
 //! Inspiration: https://codecapsule.com/2013/11/17/robin-hood-hashing-backward-shift-deletion/
 
@@ -31,15 +32,16 @@ const wrapIncrement = maple.math.wrapIncrement;
 /// Uses 'Robin Hood Hashing' with backward shift deletion (generally faster than tombstone).
 ///
 ///  complexity |     best     |   average    |    worst     |        factor
-/// ------------|--------------|--------------| -------------|----------------------
+/// ------------|--------------|--------------| -------------|--------------------------------------
+/// insertion   | O(1)         | O(1)         | O(n)         | saturation, grow routine
+/// deletion    | O(1)         | O(1)         | O(n)         | saturation, shrink routine
+/// lookup      | O(1)         | O(1)         | O(n log n)   | saturation
+/// ------------|--------------|--------------|--------------|--------------------------------------
 /// memory idle | O(n)         | O(n)         | O(4n)        | grow/shrink routine
 /// memory work | O(1)         | O(1)         | O(2)         | grow/shrink routine
-/// insertion   | O(1)         | O(1)         | O(n)         | grow routine
-/// deletion    | O(1)         | O(1)         | O(n)         | shrink routine
-/// lookup      | O(1)         | O(1)         | O(n log n)   | space saturation
-/// ------------|--------------|--------------|--------------|----------------------
-///  cache loc  | decent       | decent       | decent       | hash-spread
-/// --------------------------------------------------------------------------------
+/// ------------|--------------|--------------|--------------|--------------------------------------
+///  cache loc  | good         | decent       | poor         | hash spread
+/// ------------------------------------------------------------------------------------------------
 pub fn RobinHashMap(comptime K: type, comptime V: type) type {
     return struct {
         pub const Options = struct {

@@ -1,6 +1,20 @@
 //! Author: palsmo
 //! Status: In Progress
-//! About: ...
+//! About: Shared Among All Modules
+
+/// Execution modes for functions that support branch optimization.
+///
+///    mode   |                                        about
+/// ----------|-------------------------------------------------------------------------------------
+/// .Safe     | - Contains safety checks that may throw or panic.
+///           | - This is the suggested mode for most situations, allowing for detection and
+///           |   consequential handling of errors.
+///           |
+/// .Uncheck  | - Fastest but unsafe, most conditional branches (e.g., safety checks) are pruned
+///           |   to simpler control flows with the downside that undefined behaviors can be hit.
+///           | - If library logging is set _.Verbose_, unsafe scenarios are caught by assertions.
+/// ------------------------------------------------------------------------------------------------
+pub const ExecMode = enum { Safe, Uncheck };
 
 ///    mode   |                              about
 /// ----------|-----------------------------------------------------------------
