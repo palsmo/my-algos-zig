@@ -1,18 +1,22 @@
 //! Author: palsmo
+//! Status: Done
+//! About: Root File Queue Functionality
 
-const deque = @import("./double_ended_queue.zig");
-const fifo = @import("./fifo_queue.zig");
+const root_deque = @import("./double_ended_queue.zig");
+const root_fifo = @import("./fifo_queue.zig");
 
 // exports -->
 
-pub const DoubleEndedQueue = deque.DoubleEndedQueue;
-pub const DoubleEndedQueueGeneric = deque.DoubleEndedQueueGeneric;
-pub const FifoQueue = fifo.FifoQueue;
-pub const FifoQueueGeneric = fifo.FifoQueueGeneric;
+pub const misc = struct {
+    pub const DoubleEndedQueue = root_deque.DoubleEndedQueue;
+    pub const DoubleEndedQueueGeneric = root_deque.DoubleEndedQueueGeneric;
+    pub const FifoQueue = root_fifo.FifoQueue;
+    pub const FifoQueueGeneric = root_fifo.FifoQueueGeneric;
+};
 
 // testing -->
 
 test {
-    _ = deque;
-    _ = fifo;
+    _ = root_deque;
+    _ = root_fifo;
 }

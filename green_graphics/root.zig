@@ -1,9 +1,9 @@
 //! Author: palsmo
 //! Status: In Progress
-//! About: Green Graphics Root File
+//! About: Root File Green Graphics
 
-pub const misc = @import("./src/misc.zig");
+pub const window = @import("./src/window/root.zig");
 
 test {
-    _ = misc;
+    _ = window;
 }
