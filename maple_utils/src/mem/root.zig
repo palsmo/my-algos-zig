@@ -1,5 +1,6 @@
 //! Author: palsmo
-//! Status: In Progress
+//! Status: Done
+//! About: Root File Memory Functionality
 
 const compare = @import("./compare.zig");
 const misc = @import("./misc.zig");

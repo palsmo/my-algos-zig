@@ -18,13 +18,9 @@ const panic = std.debug.panic;
 
 /// Returns bits needed to represent `int`.
 /// Asserts `int` to be an integer.
-///
-///  computation |                                      about
-/// -------------|----------------------------------------------------------------------------------
-/// very cheap   | few basic operations
-/// ------------------------------------------------------------------------------------------------
+/// Compute - very cheap, few basic operations.
 pub fn bitsNeeded(int: anytype) u16 {
-    comptime assertType(@TypeOf(int), .{ .Int, .ComptimeInt }, "fn {s}.int", .{@src().fn_name});
+    comptime assertType(@TypeOf(int), .{ .Int, .ComptimeInt });
 
     const abs_int = if (int >= 0) int else -int;
     if (abs_int == 0) return 1;
@@ -48,13 +44,9 @@ test bitsNeeded {
 
 /// Returns the next power of two (equal or greater than `int`).
 /// Asserts `num` to be a numeric type.
-///
-///  computation |                                      about
-/// -------------|----------------------------------------------------------------------------------
-/// very cheap   | few basic operations, sometimes hardware specific instructions
-/// ------------------------------------------------------------------------------------------------
+/// Compute - very cheap, few basic and specific operations.
 pub fn nextPowerOf2(num: anytype) !@TypeOf(num) {
-    comptime assertType(@TypeOf(num), .{ .Int, .Float, .ComptimeFloat, .ComptimeInt }, "fn {s}.n", .{@src().fn_name});
+    comptime assertType(@TypeOf(num), .{ .Int, .Float, .ComptimeFloat, .ComptimeInt });
 
     if (num <= 1) return 1;
 
@@ -75,7 +67,7 @@ pub fn nextPowerOf2(num: anytype) !@TypeOf(num) {
             return 1 << shift;
         },
         .Float => {
-            if (std.math.isNan(num) or std.math.isInf(num)) return ValueError.UnableToHandle;
+            if (!std.math.isFinite(num)) return ValueError.UnableToHandle;
             const result = @exp2(@ceil(@log2(num)));
             if (std.math.isPositiveInf(result)) return ValueError.Overflow;
             return result;
@@ -121,13 +113,9 @@ test nextPowerOf2 {
 
 /// Check if `int` is some power of two.
 /// Asserts `int` to be an integer.
-///
-///  computation |                                      about
-/// -------------|----------------------------------------------------------------------------------
-/// very cheap   | single int comparison, single int subtraction, single int bit-operation
-/// ------------------------------------------------------------------------------------------------
+/// Compute - very cheap, comparison, subtraction and bit-operation.
 pub inline fn isPowerOf2(int: anytype) bool {
-    comptime assertType(@TypeOf(int), .{ .Int, .ComptimeInt }, "fn {s}.int", .{@src().fn_name});
+    comptime assertType(@TypeOf(int), .{ .Int, .ComptimeInt });
     return int != 0 and (int & (int - 1)) == 0; // * powers of 2 only has one bit set
 }
 
@@ -142,11 +130,7 @@ test isPowerOf2 {
 /// Useful for calculating tresholds for (u)sizes and similar.
 /// Adjust precision of `percent_float` by number of decimal places with `options.precision`.
 /// Asserts that `percent_float` is within range [0.0, 1.0] (* overflow error is avoided).
-///
-///  computation |                                      about
-/// -------------|----------------------------------------------------------------------------------
-/// cheap        | single float multiplication, single int division, few type conversions
-/// ------------------------------------------------------------------------------------------------
+/// Compute - cheap, multiplication, division, few type conversions.
 pub fn mulPercent(percent_float: f64, num: usize, options: struct { precision: u4 = 2 }) usize {
     // checking `percent_float`
     if (!math.isFinite(percent_float) or percent_float < 0.0 or percent_float > 1.0) {
@@ -194,13 +178,9 @@ test mulPercent {
 
 /// Returns an incremented `num`, wrapping according to [`min`, `max`).
 /// Asserts `T` to be an integer or float.
-///
-///  computation |                                      about
-/// -------------|----------------------------------------------------------------------------------
-/// very cheap   | single int addition, single int comparison
-/// ------------------------------------------------------------------------------------------------
+/// Compute - very cheap, single addition and comparison.
 pub inline fn wrapIncrement(comptime T: type, num: T, min: T, max: T) T {
-    comptime assertType(T, .{ .Int, .Float, .ComptimeInt, .ComptimeFloat }, "fn {s}.T", .{@src().fn_name});
+    comptime assertType(T, .{ .Int, .Float, .ComptimeInt, .ComptimeFloat });
     const new_num = num + 1;
     return if (new_num < max) new_num else min;
 }
@@ -214,13 +194,9 @@ test wrapIncrement {
 
 /// Returns a decremented `value`, wrapping according to [`min`, `max`).
 /// Asserts `T` to be an integer or float.
-///
-///  computation |                                      about
-/// -------------|----------------------------------------------------------------------------------
-/// very cheap   | single int comparison, single int subtraction
-/// ------------------------------------------------------------------------------------------------
+/// Compute - very cheap, single comparison and subtraction.
 pub inline fn wrapDecrement(comptime T: type, value: T, min: T, max: T) T {
-    comptime assertType(T, .{ .Int, .Float, .ComptimeInt, .ComptimeFloat }, "fn {s}.T", .{@src().fn_name});
+    comptime assertType(T, .{ .Int, .Float, .ComptimeInt, .ComptimeFloat });
     return if (min < value) value - 1 else max - 1;
 }
 

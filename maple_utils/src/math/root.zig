@@ -1,6 +1,6 @@
 //! Author: palsmo
 //! Status: In Progress
-//! About: Maths Library Root
+//! About: Root Maths Library
 //!
 //! Computation Scale:
 //!

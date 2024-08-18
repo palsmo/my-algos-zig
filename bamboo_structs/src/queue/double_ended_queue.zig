@@ -18,7 +18,6 @@ const assertAndMsg = maple.assert.assertAndMsg;
 const assertComptime = maple.assert.assertComptime;
 const assertPowerOf2 = maple.assert.assertPowOf2;
 const fastMod = maple.math.fastMod;
-const panic = std.debug.panic;
 const wrapDecrement = maple.math.wrapDecrement;
 const wrapIncrement = maple.math.wrapIncrement;
 
@@ -66,6 +65,8 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         options: Options,
         allocator: ?Allocator,
 
+        is_initialized: bool = false,
+
         /// Initialize the queue with the active `memory_mode` branch (read more _MemoryMode_).
         ///
         ///    mode   |                                    about
@@ -92,6 +93,7 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
                 .buffer = try allocator.alloc(T, options.init_capacity),
                 .options = options,
                 .allocator = allocator,
+                .is_initialized = true,
             };
         }
 
@@ -112,6 +114,7 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
                     .shrinkable = false,
                 },
                 .allocator = null,
+                .is_initialized = true,
             };
         }
 
@@ -130,6 +133,7 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
                 },
                 .options = options,
                 .allocator = null,
+                .is_initialized = true,
             };
         }
 
@@ -137,6 +141,7 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// Issue key specs:
         /// - Panic (only *.Buffer* and *.Comptime* `memory_mode`).
         pub fn deinit(self: *const Self) void {
+            if (!self.is_initialized) return;
             switch (memory_mode) {
                 .Alloc => {
                     const ally = self.allocator orelse unreachable;
@@ -151,30 +156,35 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// Get current amount of 'T' that's buffered in the queue.
         /// Time - O(1), direct value access.
         pub inline fn capacity(self: *const Self) usize {
+            assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
             return self.buffer.len;
         }
 
         /// Get current amount of 'T' that's occupying the queue.
         /// Time - O(1), direct value access.
         pub inline fn length(self: *const Self) usize {
+            assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
             return self.size;
         }
 
         /// Check if the queue is empty.
         /// Time - O(1), direct value access.
         pub inline fn isEmpty(self: *const Self) bool {
+            assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
             return self.size == 0;
         }
 
         /// Check if the queue is full.
         /// Time - O(1), direct value access.
         pub inline fn isFull(self: *const Self) bool {
+            assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
             return self.size == self.buffer.len;
         }
 
         /// Check if `ptr` holds the address of the current 'self.buffer'.
         /// Time - O(1), direct value access.
         pub inline fn isValidRef(self: *const Self, ptr: *const []T) bool {
+            assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
             return ptr == &self.buffer;
         }
 
@@ -191,11 +201,18 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// Other:
         /// - User has manual control over the 'grow' routine (only *.Uncheck* `exec_mode`).
         pub fn pushFirst(self: *Self, item: T, comptime exec_mode: ExecMode) !void {
-            if (memory_mode == .Comptime) assertComptime(@src().fn_name);
+            // setup?
+            switch (exec_mode) {
+                .Uncheck => {},
+                .Safe => {
+                    assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
+                    if (memory_mode == .Comptime) assertComptime(@src().fn_name);
+                },
+            }
 
             // grow?
             switch (exec_mode) {
-                .Uncheck => {}, // TODO! Add logging in verbose mode to warn about this.
+                .Uncheck => {},
                 .Safe => switch (self.size < self.buffer.len) {
                     true => {},
                     false => switch (memory_mode) {
@@ -224,10 +241,17 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// - Throws error when required capacity would overflow *usize*.
         /// - Throws error when queue hasn't enough capacity with 'self.options.growable' set to false.
         /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
-        pub fn pushFirstBatch(self: *Self, items: []const T) !void {
-            if (memory_mode == .Comptime) assertComptime(@src().fn_name);
-            if (items.len == 0) return;
+        pub fn pushFirstBatch(self: *Self, items: []const T, exec_mode: ExecMode) !void {
+            // setup?
+            switch (exec_mode) {
+                .Uncheck => {},
+                .Safe => {
+                    assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
+                    if (memory_mode == .Comptime) assertComptime(@src().fn_name);
+                },
+            }
 
+            if (items.len == 0) return;
             const required_capacity = try maple.math.safeAdd(usize, self.size, items.len);
 
             // grow?
@@ -276,11 +300,18 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// Other:
         /// - User has manual control over the 'grow' routine (only *.Uncheck* `exec_mode`).
         pub fn pushLast(self: *Self, item: T, comptime exec_mode: ExecMode) !void {
-            if (memory_mode == .Comptime) assertComptime(@src().fn_name);
+            // setup?
+            switch (exec_mode) {
+                .Uncheck => {},
+                .Safe => {
+                    assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
+                    if (memory_mode == .Comptime) assertComptime(@src().fn_name);
+                },
+            }
 
             // grow?
             switch (exec_mode) {
-                .Uncheck => {}, // TODO! Add logging in verbose mode to warn about this.
+                .Uncheck => {},
                 .Safe => switch (self.size < self.buffer.len) {
                     true => {},
                     false => switch (memory_mode) {
@@ -309,10 +340,17 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// - Throws error when required capacity would overflow *usize*.
         /// - Throws error when queue hasn't enough capacity with 'self.options.growable' set to false.
         /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
-        pub fn pushLastBatch(self: *Self, items: []const T) !void {
-            if (memory_mode == .Comptime) assertComptime(@src().fn_name);
-            if (items.len == 0) return;
+        pub fn pushLastBatch(self: *Self, items: []const T, exec_mode: ExecMode) !void {
+            // setup?
+            switch (exec_mode) {
+                .Uncheck => {},
+                .Safe => {
+                    assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
+                    if (memory_mode == .Comptime) assertComptime(@src().fn_name);
+                },
+            }
 
+            if (items.len == 0) return;
             const required_capacity = try maple.math.safeAdd(usize, self.size, items.len);
 
             // grow?
@@ -360,12 +398,19 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// Other:
         /// - User has manual control over the 'shrink' routine (only *.Uncheck* `exec_mode`).
         pub fn popFirst(self: *Self, comptime exec_mode: ExecMode) ?T {
-            if (memory_mode == .Comptime) assertComptime(@src().fn_name);
-
-            // check empty
+            // setup?
             switch (exec_mode) {
-                .Uncheck => {}, // TODO! Add logging in verbose mode to warn about this.
-                .Safe => if (self.size != 0) {} else return null,
+                .Uncheck => {},
+                .Safe => {
+                    assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
+                    if (memory_mode == .Comptime) assertComptime(@src().fn_name);
+                },
+            }
+
+            // empty?
+            switch (exec_mode) {
+                .Uncheck => {},
+                .Safe => if (self.size == 0) return null,
             }
 
             const item = self.buffer[self.head];
@@ -379,7 +424,7 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
 
             // shrink?
             switch (exec_mode) {
-                .Uncheck => {}, // TODO! Add logging in verbose mode to warn about this.
+                .Uncheck => {},
                 .Safe => switch (memory_mode) {
                     .Buffer => {},
                     .Alloc, .Comptime => switch (self.options.shrinkable) {
@@ -409,12 +454,19 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// Other:
         /// - User has manual control over the 'shrink' routine (only *.Uncheck* `exec_mode`).
         pub fn popLast(self: *Self, comptime exec_mode: ExecMode) ?T {
-            if (memory_mode == .Comptime) assertComptime(@src().fn_name);
-
-            // check empty
+            // setup?
             switch (exec_mode) {
-                .Uncheck => {}, // TODO! Add logging in verbose mode to warn about this.
-                .Safe => if (self.size != 0) {} else return null,
+                .Uncheck => {},
+                .Safe => {
+                    assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
+                    if (memory_mode == .Comptime) assertComptime(@src().fn_name);
+                },
+            }
+
+            // empty?
+            switch (exec_mode) {
+                .Uncheck => {},
+                .Safe => if (self.size == 0) return null,
             }
 
             const item = self.buffer[self.tail];
@@ -454,8 +506,12 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// - Undefined behavior when queue is empty (only *.Uncheck* `exec_mode`).
         pub fn peekFirst(self: *const Self, comptime exec_mode: ExecMode) ?T {
             switch (exec_mode) {
-                .Uncheck => {}, // TODO! Add logging in verbose mode to warn about this.
-                .Safe => if (self.size != 0) {} else return null,
+                .Uncheck => {},
+                .Safe => {
+                    assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
+                    if (memory_mode == .Comptime) assertComptime(@src().fn_name);
+                    if (self.size == 0) return null;
+                },
             }
             return self.buffer[self.head];
         }
@@ -471,8 +527,12 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// - Undefined behavior when queue is empty (only *.Uncheck* `exec_mode`).
         pub fn peekLast(self: *const Self, comptime exec_mode: ExecMode) ?T {
             switch (exec_mode) {
-                .Uncheck => {}, // TODO! Add logging in verbose mode to warn about this.
-                .Safe => if (self.size != 0) {} else return null,
+                .Uncheck => {},
+                .Safe => {
+                    assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
+                    if (memory_mode == .Comptime) assertComptime(@src().fn_name);
+                    if (self.size != 0) {} else return null;
+                },
             }
             return self.buffer[self.tail];
         }
@@ -489,7 +549,11 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         pub fn peekIndex(self: *const Self, index: usize, comptime exec_mode: ExecMode) !T {
             switch (exec_mode) {
                 .Uncheck => {}, // TODO! Add logging in verbose mode to warn about this.
-                .Safe => if (index < self.size) {} else return IndexError.OutOfBounds,
+                .Safe => {
+                    assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
+                    if (memory_mode == .Comptime) assertComptime(@src().fn_name);
+                    if (index > self.size) return IndexError.OutOfBounds;
+                },
             }
             const sum = self.head +% index;
             const actual_index = fastMod(usize, sum, self.buffer.len);

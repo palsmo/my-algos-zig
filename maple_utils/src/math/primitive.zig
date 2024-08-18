@@ -1,5 +1,5 @@
 //! Author: palsmo
-//! Status: In Progress
+//! Status: Done
 //! About: Primitive Mathematical Operations
 
 const std = @import("std");
@@ -12,17 +12,18 @@ const assertType = mod_assert.misc.assertType;
 const expectEqual = std.testing.expectEqual;
 const expectError = std.testing.expectError;
 
-/// Returns the sum of `a` + `b`.
+/// Returns the sum of `int_a` + `int_b`.
 /// Asserts `T` to be an integer type.
-/// Compute - very cheap, basic operations and comparison.
+/// Compute - very cheap, basic operation and comparison.
 /// Issue key specs:
 /// - Throws error when result would overflow `T`.
-pub inline fn safeAdd(comptime T: type, a: T, b: T) !T {
-    comptime assertType(T, .{ .Int, .ComptimeInt }, "fn {s}.T", .{@src().fn_name});
+pub inline fn safeAdd(comptime T: type, int_a: T, int_b: T) !T {
+    @setRuntimeSafety(false); // * removes testing of-flag twice in asm
+    comptime assertType(T, .{ .Int, .ComptimeInt });
     switch (T) { // * comptime branch prune
-        comptime_int => return a + b,
+        comptime_int => return int_a + int_b,
         else => {
-            const result = @addWithOverflow(a, b);
+            const result = @addWithOverflow(int_a, int_b);
             switch (result[1]) {
                 0 => return result[0],
                 1 => return ValueError.Overflow,
@@ -36,17 +37,18 @@ test safeAdd {
     try expectError(ValueError.Overflow, safeAdd(u8, 128, 128));
 }
 
-/// Returns the product of `a` * `b`.
+/// Returns the product of `int_a` * `int_b`.
 /// Asserts `T` to be an integer type.
-/// Compute - very cheap, basic operations and comparison.
+/// Compute - very cheap, basic operation and comparison.
 /// Issue key specs:
 /// - Throws error when result would overflow `T`.
-pub inline fn safeMul(comptime T: type, a: T, b: T) !T {
-    comptime assertType(T, .{ .Int, .ComptimeInt }, "fn {s}.T", .{@src().fn_name});
+pub inline fn safeMul(comptime T: type, int_a: T, int_b: T) !T {
+    @setRuntimeSafety(false); // * removes testing of-flag twice in asm
+    comptime assertType(T, .{ .Int, .ComptimeInt });
     switch (T) { // * comptime branch prune
-        comptime_int => return a * b,
+        comptime_int => return int_a * int_b,
         else => {
-            const result = @mulWithOverflow(a, b);
+            const result = @mulWithOverflow(int_a, int_b);
             switch (result[1]) {
                 0 => return result[0],
                 1 => return ValueError.Overflow,
@@ -67,15 +69,16 @@ test safeMul {
 
 /// Returns the difference of `a` - `b`.
 /// Asserts `T` to be an integer type.
-/// Compute - very cheap, basic operations and comparison.
+/// Compute - very cheap, basic operation and comparison.
 /// Issue key specs:
 /// - Throws error when result would overflow `T`.
-pub inline fn safeSub(comptime T: type, a: T, b: T) !T {
-    comptime assertType(T, .{ .Int, .ComptimeInt }, "fn {s}.T", .{@src().fn_name});
+pub inline fn safeSub(comptime T: type, int_a: T, int_b: T) !T {
+    @setRuntimeSafety(false); // * removes testing of-flag twice in asm
+    comptime assertType(T, .{ .Int, .ComptimeInt });
     switch (T) { // * comptime branch prune
-        comptime_int => return a - b,
+        comptime_int => return int_a - int_b,
         else => {
-            const result = @subWithOverflow(a, b);
+            const result = @subWithOverflow(int_a, int_b);
             switch (result[1]) {
                 0 => return result[0],
                 1 => return ValueError.Underflow,
@@ -95,12 +98,12 @@ test safeSub {
     try expectError(ValueError.Underflow, safeSub(i8, -128, 1));
 }
 
-/// Fast `a` modulus `b`, but `b` has to be a power of two.
-/// Asserts `T` to be an integer.
+/// Fast `int_a` modulus `int_b`, but `int_b` has to be a power of two.
+/// Asserts `T` to be an *integer*.
 /// Compute - very cheap, two basic operations.
-pub inline fn fastMod(comptime T: type, a: T, b: T) T {
-    comptime assertType(T, .{ .Int, .ComptimeInt }, "fn {s}.T", .{@src().fn_name});
-    return a & (b - 1);
+pub inline fn fastMod(comptime T: type, int_a: T, int_b: T) T {
+    comptime assertType(T, .{ .Int, .ComptimeInt });
+    return int_a & (int_b - 1);
 }
 
 test fastMod {}

@@ -1,22 +1,22 @@
 //! Author: palsmo
 //! Status: Done
-//! About: Assert Functionality
+//! About: Root File Assert Functionality
 
-const _misc = @import("./misc.zig");
+const root_misc = @import("./misc.zig");
 
 // exports -->
 
-// miscellaneous
 pub const misc = struct {
-    pub const assertAndMsg = _misc.assertAndMsg;
-    pub const assertComptime = _misc.assertComptime;
-    pub const assertFn = _misc.assertFn;
-    pub const assertPowOf2 = _misc.assertPowOf2;
-    pub const assertType = _misc.assertType;
+    pub const assertAndMsg = root_misc.assertAndMsg;
+    pub const assertComptime = root_misc.assertComptime;
+    pub const assertFn = root_misc.assertFn;
+    pub const assertPowerOf2 = root_misc.assertPowerOf2;
+    pub const assertType = root_misc.assertType;
+    pub const assertTypeSame = root_misc.assertTypeSame;
 };
 
 // testing -->
 
 test {
-    _ = _misc;
+    _ = root_misc;
 }

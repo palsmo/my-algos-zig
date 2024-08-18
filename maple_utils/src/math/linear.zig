@@ -5,128 +5,82 @@
 const std = @import("std");
 const math = std.math;
 
-const maple_debug = @import("../debug/root.zig");
-const maple_typ = @import("../typ/root.zig");
+const proj_shared = @import("./../../../shared.zig");
+const mod_assert = @import("../assert/root.zig");
+const mod_debug = @import("../debug/root.zig");
+const root_prim = @import("./primitive.zig");
+const root_shared = @import("./shared.zig");
 
-const assertAndMsg = maple_debug.assertAndMsg;
-const assertComptime = maple_debug.assertComptime;
-const assertType = maple_typ.assertType;
-const expectEqual = std.testing.expectEqual;
+const ExecMode = proj_shared.ExecMode;
+const ValueError = root_shared.ValueError;
+const assertAndMsg = mod_assert.misc.assertAndMsg;
+const assertComptime = mod_assert.misc.assertComptime;
+const assertType = mod_assert.misc.assertType;
+const assertTypeSame = mod_assert.misc.assertTypeSame;
+const assertVectors = mod_assert.misc.assertVectors;
 const comptimePrint = std.fmt.comptimePrint;
+const expectEqual = std.testing.expectEqual;
 const panic = std.debug.panic;
+const safeAdd = root_prim.safeAdd;
+const safeMul = root_prim.safeMul;
 
-/// Float vectors with 32-bit precision.
-/// Modern GPU's are optimized for floating-point operations, particularly f32.
-pub const fVec2 = @Vector(2, f32);
-pub const fVec3 = @Vector(3, f32);
-pub const fVec4 = @Vector(4, f32);
-/// Unsigned integer vectors with 64-bit precision.
-pub const uVec2 = @Vector(2, u64);
-pub const uVec3 = @Vector(3, u64);
-pub const uVec4 = @Vector(4, u64);
-/// Signed integer vectors with 64-bit precision.
-pub const iVec2 = @Vector(2, i64);
-pub const iVec3 = @Vector(3, i64);
-pub const iVec4 = @Vector(4, i64);
+/// Calculate the *dot-product* between `vec_a` and `vec_b`.
+/// Asserts `vec_a` and `vec_b` to be numeric vectors of the same type.
+/// Compute - very cheap, few basic operations.
+/// Issue key specs:
+/// - Throws error when calculation overflows (only *.Safe* `exec_mode`).
+pub inline fn dot(vec_a: anytype, vec_b: anytype, comptime exec_mode: ExecMode) switch (exec_mode) {
+    .Uncheck => @TypeOf(vec_a[0]),
+    .Safe => !@TypeOf(vec_a[0]),
+} {
+    comptime assertTypeSame(vec_a, vec_b);
+    comptime assertType(@TypeOf(vec_a), .{.Vector});
+    comptime assertType(@typeInfo(@TypeOf(vec_a)).Vector.child, .{ .Int, .Float, .ComptimeInt, .ComptimeFloat });
 
-/// Configuration for linear algebra operations in this library.
-/// _.Fast_ is fastest, _.Safe_ (comes with some overhead) panics on overflows.
-///
-///  overflow |      factor
-/// ----------|-----------------
-/// integer   | overflow bit
-/// float     | inf bit-pattern
-/// ----------------------------
-pub const Mode = enum {
-    Fast,
-    Safe,
-};
+    const T_vec = @TypeOf(vec_a);
+    const T_vec_child = @typeInfo(T_vec).Vector.child;
 
-/// Assert that `T_vec_a` and `T_vec_b` are vectors of same type.
-fn assertVectors(comptime T_vec_a: type, comptime T_vec_b: type) void {
-    assertComptime(@src().fn_name);
-    const msg = "Type mismatch for '{s}' (`vec_a`) and '{s}' (`vec_b`).";
-    assertAndMsg(T_vec_a == T_vec_b, msg, .{ @typeName(T_vec_a), @typeName(T_vec_b) });
-    assertType(T_vec_a, .{.Vector}, @src().fn_name ++ ".T_vec_a");
-}
-
-/// Calculate the dot product of vectors `a` and `b`.
-/// Depending on `mode` certain logic may be pruned or optimized comptime.
-/// Asserts `a` and `b` to be vector types.
-/// Computation: very cheap
-pub inline fn dot(vec_a: anytype, vec_b: anytype, comptime mode: Mode) @TypeOf(vec_a[0]) {
-    comptime assertVectors(@TypeOf(vec_a), @TypeOf(vec_b));
-
-    const T_vec_info = @typeInfo(@TypeOf(vec_a)).Vector;
-    var sum: T_vec_info.child = 0;
-
-    switch (mode) {
-        .Fast => {
-            const vec_prod = vec_a * vec_b;
-            inline for (0..T_vec_info.len) |i| {
-                sum += vec_prod[i];
-            }
-        },
+    switch (exec_mode) { // * comptime branch prune
+        .Uncheck => return @reduce(.Add, vec_a *% vec_b),
         .Safe => {
-            switch (@typeInfo(T_vec_info.child)) {
-                .Float => {},
-                .Int, .ComptimeInt => {
-                    const vec_prod, const vec_mul_of = @mulWithOverflow(vec_a, vec_b);
-                    var f_overflow = false;
+            switch (@typeInfo(T_vec_child)) { // * comptime branch prune
+                .Int => {
+                    const vec_zero: T_vec = @splat(0);
+                    if (vec_a == vec_zero or vec_b == vec_zero) return 0;
 
-                    inline for (0..T_vec_info.len) |i| {
-                        switch (vec_mul_of[i]) {
-                            0 => {},
-                            1 => f_overflow = true,
-                        }
+                    const vec_prod = vec_a *% vec_b;
+                    if ((vec_prod / vec_a) != vec_b) return ValueError.Overflow; // * mul wraps, div don't
+
+                    var sum: T_vec_child = 0;
+                    inline for (0..@typeInfo(T_vec).Vector.len) |i| {
+                        sum = try safeAdd(T_vec_child, sum, vec_prod[i]);
                     }
 
-                    if (!f_overflow) {
-                        inline for (0..T_vec_info.len) |i| {
-                            const result_add = @addWithOverflow(sum, vec_prod[i]);
-                            switch (result_add[1]) {
-                                0 => sum += result_add[0],
-                                1 => {
-                                    f_overflow = true;
-                                    break;
-                                },
-                            }
-                        }
-                    }
-
-                    if (f_overflow) {
-                        if (@inComptime()) {
-                            @compileError(comptimePrint(
-                                "Overflow occurred in dot product calculation between vectors {any} and {any}.",
-                                .{ vec_a, vec_b },
-                            ));
-                        } else {
-                            panic(
-                                "Overflow occurred in dot product calculation between vectors {any} and {any}.",
-                                .{ vec_a, vec_b },
-                            );
-                        }
-                    }
+                    return sum;
                 },
-                .Pointer => {},
+                .Float => {
+                    const result = @reduce(.Add, vec_a * vec_b);
+                    return if (std.math.isFinite(result)) result else ValueError.Overflow;
+                },
+                .ComptimeInt, .ComptimeFloat => return @reduce(.Add, vec_a *% vec_b),
                 else => unreachable,
             }
         },
     }
-
-    return sum;
 }
 
 test dot {
-    const vec_a: uVec3 = .{ 1, 2, 3 };
-    const vec_b: uVec3 = .{ 3, 2, 1 };
+    const V = @Vector(3, u8);
+    const vec_a: V = .{ 1, 2, 3 };
+    const vec_b: V = .{ 3, 2, 1 };
+    const expect = 10;
     const result = dot(vec_a, vec_b, .Safe);
-    try expectEqual(10, result);
+    try expectEqual(expect, result);
 }
 
-/// Calculate the cross product for vectors `a` and `b`.
-/// Asserts `a` and `b` to be vector types.
-/// Computation: cheap
+/// Calculate the cross product between `vec_a` and `vec_b`.
+/// Asserts `vec_a` and `vec_b` to be vector types.
+/// Compute - cheap
 pub inline fn cross(vec_a: anytype, vec_b: anytype) @TypeOf(vec_a) {
     comptime assertVectors(@TypeOf(vec_a), @TypeOf(vec_b));
 
@@ -139,33 +93,35 @@ pub inline fn cross(vec_a: anytype, vec_b: anytype) @TypeOf(vec_a) {
 
 test cross {}
 
-/// Normalize vector `v`.
-/// Asserts `v` to be a vector type.
-/// Computation | moderate
-pub inline fn norm(vec: anytype, comptime mode: Mode) @TypeOf(vec) {
+/// Normalize vector `vec`.
+/// Asserts `vec` to be a vector.
+/// Compute - moderate
+pub inline fn norm(vec: anytype, comptime exec_mode: ExecMode) @TypeOf(vec) {
     comptime assertType(@TypeOf(vec), .{.Vector}, @src().fn_name ++ ".vec");
-    return vec / @as(@TypeOf(vec), @splat(length(vec, mode)));
+    return vec / @as(@TypeOf(vec), @splat(length(vec, exec_mode)));
 }
 
 test norm {
-    const v: fVec3 = .{ 3, 4, 0 };
-    const n = norm(v, .Safe);
-    const expected: fVec3 = .{ 0.6, 0.8, 0 };
+    const V = @Vector(3, f32);
+    const v: V = .{ 3, 4, 0 };
+    const result: V = norm(v, .Safe);
+    const expect: V = .{ 0.6, 0.8, 0 };
 
-    try expectEqual(expected[0], n[0]);
-    try expectEqual(expected[1], n[1]);
-    try expectEqual(expected[2], n[2]);
+    try expectEqual(expect[0], result[0]);
+    try expectEqual(expect[1], result[1]);
+    try expectEqual(expect[2], result[2]);
 }
 
-/// Get the length of vector `v`.
-/// Asserts `v` to be a vector type.
-/// Computation | moderate
-pub inline fn length(vec: anytype, comptime mode: Mode) f32 {
+/// Get the length of vector `vec`.
+/// Asserts `vec` to be a vector.
+/// Compute - moderate
+pub inline fn length(vec: anytype, comptime exec_mode: ExecMode) f32 {
     comptime assertType(@TypeOf(vec), .{.Vector}, @src().fn_name ++ ".vec");
-    return @sqrt(dot(vec, vec, mode));
+    return @sqrt(dot(vec, vec, exec_mode));
 }
 
 test length {
-    const v: uVec3 = .{ 1, 2, 2 };
-    try expectEqual(3.0, length(v, .Safe));
+    const V = @Vector(3, u8);
+    const vec: V = .{ 1, 2, 2 };
+    try expectEqual(3.0, length(vec, .Safe));
 }

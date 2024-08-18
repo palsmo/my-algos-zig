@@ -1,6 +1,6 @@
 //! Author: palsmo
 //! Status: Done
-//! About: Maple Utils Build Script
+//! About: Green Graphics Build Script
 
 const std = @import("std");
 
@@ -17,6 +17,13 @@ pub fn build(b: *std.Build) void {
     const op_file_desc = "Filepath relative module root";
     const op_file_path = b.option([]const u8, op_file_name, op_file_desc);
 
+    // dependencies -->
+
+    const dep_maple_utils = b.dependency("maple_utils", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("root");
+
     // public modules -->
 
     const mod_pub_root = b.addModule("root", .{
@@ -25,7 +32,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    _ = mod_pub_root;
+    mod_pub_root.link_libc = true;
+    mod_pub_root.linkSystemLibrary("X11", .{});
+    mod_pub_root.addImport("maple_utils", dep_maple_utils);
 
     // testing -->
 
@@ -38,6 +47,10 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         });
+
+        test_compile.root_module.link_libc = true;
+        test_compile.root_module.linkSystemLibrary("X11", .{});
+        test_compile.root_module.addImport("maple_utils", dep_maple_utils);
 
         const test_artifact = b.addRunArtifact(test_compile);
         test_step.dependOn(&test_artifact.step);

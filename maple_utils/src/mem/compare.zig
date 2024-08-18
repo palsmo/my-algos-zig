@@ -7,11 +7,10 @@ const panic = std.debug.panic;
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 
-/// Compare two values `a` and `b` by an operator `op`.
-/// Efficient, comptime evaluates to single comparisons.
+/// Compare values `a` and `b` by an operator `op`.
 pub inline fn cmp(a: anytype, comptime op: std.math.CompareOperator, b: anytype) bool {
     if (@TypeOf(a) != @TypeOf(b)) @compileError("Arguments `a` and `b` are not same type, can't do comparison.");
-    return switch (op) {
+    return switch (op) { // * comptime branch prune
         .lt => ord(a, b) == .lt,
         .lte => ord(a, b) != .gt,
         .gt => ord(a, b) == .gt,
@@ -56,32 +55,30 @@ test cmp {
     try expectEqual(false, cmp(a, .neq, a));
 }
 
-/// Order of `a` relative `b`, asserts same type, returns .lt, .gt or .eq
-/// Efficient, comptime evaluates to single type specific code blocks.
-/// Not inlined by default since some prongs contain recursion, compiler may decide to inline.
+/// Get order of `a` relative `b`, returns *.lt*, *.gt* or *.eq*
+/// Asserts `a` and `b` to be matching types.
+/// Uses recursion for certain types, be mindful when inlining the function.
 ///
-/// Characteristics:
-///
-///   type   |                             comparison
-/// ---------|-------------------------------------------------------------------
-/// Numeric  | numeric
-/// Array    | element sequential
-/// Vector   | element sequential
-/// Pointer  | [slice, many] element sequential, if same then numeric of sizes
-///          | [one, c] pointee comparison
-/// Optional | if `a` and `b` non-null then value, else null < non-null
-/// Bool     | false < true.
-/// Enum     | numeric
-/// Union    | if same active field then value, else field order (first < last).
-/// Struct   | field by field (top to bottom), field-value
-/// Null     | always equal
-/// Void     | always equal
-/// -----------------------------------------------------------------------------
+///    type   |                                  comparison/result
+/// ----------|-------------------------------------------------------------------------------------
+/// Numeric   | numeric
+/// Array     | element sequential
+/// Vector    | element sequential
+/// Pointer   | [slice, many] element sequential, if same then numeric of sizes
+///           | [one, c] pointee comparison
+/// Optional  | if `a` and `b` non-null then value, else null < non-null
+/// Bool      | false < true.
+/// Enum      | numeric
+/// Union     | if same active field then value, else field order (first < last).
+/// Struct    | field by field (top to bottom), field-value
+/// Null      | always equal
+/// Void      | always equal
+/// ------------------------------------------------------------------------------------------------
 pub fn ord(a: anytype, b: anytype) std.math.Order {
     const T = @TypeOf(a);
     if (T != @TypeOf(b)) @compileError("Arguments are not same type, can't evaluate order.");
 
-    switch (@typeInfo(T)) {
+    switch (@typeInfo(T)) { // * comptime branch prune
         .Int, .Float, .ComptimeInt, .ComptimeFloat => {
             if (a < b) return .lt;
             if (a > b) return .gt;
@@ -102,7 +99,7 @@ pub fn ord(a: anytype, b: anytype) std.math.Order {
             return .eq;
         },
         .Pointer => |info| {
-            switch (info.size) {
+            switch (info.size) { // * comptime branch prune
                 .Slice => {
                     // element by element
                     const min_len = @min(a.len, b.len);
@@ -158,6 +155,7 @@ pub fn ord(a: anytype, b: anytype) std.math.Order {
                 const order = ord(a_tag, b_tag);
                 if (order == .eq) {
                     // active fields are same, return order based on field-value
+                    // * generate prongs
                     const a_val = switch (a) {
                         inline else => |v| v,
                     };

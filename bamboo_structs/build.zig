@@ -30,6 +30,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
     mod_pub_root.addImport("maple_utils", dep_maple_utils);
 
     // testing -->
@@ -37,15 +38,16 @@ pub fn build(b: *std.Build) void {
     if (op_file_path) |path| {
         const name = std.fs.path.basename(path);
 
-        const test_file = b.addTest(.{
+        const test_compile = b.addTest(.{
             .name = name,
             .root_source_file = b.path(path),
             .target = target,
             .optimize = optimize,
         });
-        test_file.root_module.addImport("maple_utils", dep_maple_utils);
 
-        const test_file_run = b.addRunArtifact(test_file);
-        test_step.dependOn(&test_file_run.step);
+        test_compile.root_module.addImport("maple_utils", dep_maple_utils);
+
+        const test_artifact = b.addRunArtifact(test_compile);
+        test_step.dependOn(&test_artifact.step);
     }
 }

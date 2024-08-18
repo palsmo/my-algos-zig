@@ -1,12 +1,20 @@
 //! Author: palsmo
-//! Status: In Progress
+//! Status: Done
 
 const std = @import("std");
 
+const mod_assert = @import("../assert/root.zig");
+
+const assertType = mod_assert.misc.assertType;
+const assertTypeSame = mod_assert.misc.assertTypeSame;
 const expectEqual = std.testing.expectEqual;
 
 /// Inline swap values `a` <-> `b`.
-pub inline fn swap(comptime T: type, a: *T, b: *T) void {
+/// Asserts `a` and `b` to be pointers of same type.
+pub inline fn swap(a: anytype, b: anytype) void {
+    comptime assertTypeSame(@TypeOf(a), @TypeOf(b));
+    comptime assertType(@TypeOf(a), .{.Pointer}, "fn {s}.a", .{@src().fn_name});
+
     const tmp = a.*;
     a.* = b.*;
     b.* = tmp;
