@@ -1,0 +1,22 @@
+Conceptual Structure of 'comptime_int' in Zig.
+
+Conceptually it can be thought of as having separate components:
+1. Sign  - The sign of the integer (positive, negative, zero).
+2. Value - The actual integer value, stored with arbitrary precision.
+
+Characteristics:
+- Has arbitrary precision, able to represent integers of any size.
+- Exists only at compile-time; not stored in memory at runtime.
+- Can automatically coerce to runtime integer when referenced outside comptime.
+
+Bitwise Operations:
+- Doesn't have a fixed "bitwidth" in the same way runtime integers do.
+- The "bits" aren't stored in a fixed-size array but in an arbitrary-precision format.
+- Performing bitwise operations require explicit casting to a specific integer type.
+
+Implementation:
+- Uses an internal big integer library. // TODO, ensure this is correct.
+
+Usage:
+- Used for compile-time computations and constant expressions.
+- Allows for flexible integer calculations without overflow concerns.

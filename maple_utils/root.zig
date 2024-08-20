@@ -3,5 +3,5 @@ pub const bench = @import("./src/bench/root.zig");
 pub const math = @import("./src/math/root.zig");
 
 test {
-    _ = bench;
+    _ = math;
 }

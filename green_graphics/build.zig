@@ -8,7 +8,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // steps
     const test_step = b.step("test", "Run file test-blocks");
 
     // options -->
@@ -19,22 +18,23 @@ pub fn build(b: *std.Build) void {
 
     // dependencies -->
 
-    const dep_maple_utils = b.dependency("maple_utils", .{
+    // maple
+    const dep_mapleutils = b.dependency("maple_utils", .{
         .target = target,
         .optimize = optimize,
     }).module("root");
 
     // public modules -->
 
+    // root
     const mod_pub_root = b.addModule("root", .{
         .root_source_file = b.path("./root.zig"),
+        .link_libc = true,
         .target = target,
         .optimize = optimize,
     });
-
-    mod_pub_root.link_libc = true;
-    mod_pub_root.linkSystemLibrary("X11", .{});
-    mod_pub_root.addImport("maple_utils", dep_maple_utils);
+    mod_pub_root.addImport("maple_utils", dep_mapleutils);
+    mod_pub_root.linkSystemLibrary("xcb", .{ .preferred_link_mode = .static });
 
     // testing -->
 
@@ -44,13 +44,13 @@ pub fn build(b: *std.Build) void {
         const test_compile = b.addTest(.{
             .name = name,
             .root_source_file = b.path("./root.zig"),
+            .link_libc = true,
             .target = target,
             .optimize = optimize,
         });
 
-        test_compile.root_module.link_libc = true;
-        test_compile.root_module.linkSystemLibrary("X11", .{});
-        test_compile.root_module.addImport("maple_utils", dep_maple_utils);
+        test_compile.root_module.addImport("maple_utils", dep_mapleutils);
+        test_compile.root_module.linkSystemLibrary("xcb", .{ .preferred_link_mode = .static });
 
         const test_artifact = b.addRunArtifact(test_compile);
         test_step.dependOn(&test_artifact.step);

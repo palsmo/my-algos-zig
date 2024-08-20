@@ -1,6 +1,6 @@
 //! Author: palsmo
 //! Status: Done
-//! About: Root File Window Functionality
+//! About: Root File Input Functionality
 
 const root_misc = @import("./misc.zig");
 const root_shared = @import("./shared.zig");
@@ -8,9 +8,8 @@ const root_shared = @import("./shared.zig");
 // exports -->
 
 pub const misc = struct {
-    pub const WindowHandler = root_misc.WindowHandler;
-    pub const XClientError = root_shared.XClientError;
-    pub const WClientError = root_shared.WClientError;
+    pub const InputHandler = root_misc.InputHandler;
+    pub const InputError = root_shared.InputError;
 };
 
 // testing -->

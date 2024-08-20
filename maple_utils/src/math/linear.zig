@@ -17,18 +17,17 @@ const assertAndMsg = mod_assert.misc.assertAndMsg;
 const assertComptime = mod_assert.misc.assertComptime;
 const assertType = mod_assert.misc.assertType;
 const assertTypeSame = mod_assert.misc.assertTypeSame;
-const assertVectors = mod_assert.misc.assertVectors;
 const comptimePrint = std.fmt.comptimePrint;
 const expectEqual = std.testing.expectEqual;
 const panic = std.debug.panic;
 const safeAdd = root_prim.safeAdd;
 const safeMul = root_prim.safeMul;
 
-/// Calculate the *dot-product* between `vec_a` and `vec_b`.
+/// Calculate the dot-product of `vec_a` o `vec_b`.
 /// Asserts `vec_a` and `vec_b` to be numeric vectors of the same type.
 /// Compute - very cheap, few basic operations.
 /// Issue key specs:
-/// - Throws error when calculation overflows (only *.Safe* `exec_mode`).
+/// - Throw error when calculation overflows (only *.Safe* `exec_mode`).
 pub inline fn dot(vec_a: anytype, vec_b: anytype, comptime exec_mode: ExecMode) switch (exec_mode) {
     .Uncheck => @TypeOf(vec_a[0]),
     .Safe => !@TypeOf(vec_a[0]),
@@ -59,8 +58,10 @@ pub inline fn dot(vec_a: anytype, vec_b: anytype, comptime exec_mode: ExecMode) 
                     return sum;
                 },
                 .Float => {
-                    const result = @reduce(.Add, vec_a * vec_b);
-                    return if (std.math.isFinite(result)) result else ValueError.Overflow;
+                    const sum = @reduce(.Add, vec_a * vec_b);
+                    if (std.math.isPositiveInf(sum)) return ValueError.Overflow;
+
+                    return sum;
                 },
                 .ComptimeInt, .ComptimeFloat => return @reduce(.Add, vec_a *% vec_b),
                 else => unreachable,
@@ -78,50 +79,50 @@ test dot {
     try expectEqual(expect, result);
 }
 
-/// Calculate the cross product between `vec_a` and `vec_b`.
-/// Asserts `vec_a` and `vec_b` to be vector types.
-/// Compute - cheap
-pub inline fn cross(vec_a: anytype, vec_b: anytype) @TypeOf(vec_a) {
-    comptime assertVectors(@TypeOf(vec_a), @TypeOf(vec_b));
+///// Calculate the cross product between `vec_a` and `vec_b`.
+///// Asserts `vec_a` and `vec_b` to be vector types.
+///// Compute - cheap
+//pub inline fn cross(vec_a: anytype, vec_b: anytype) @TypeOf(vec_a) {
+//    comptime assertVectors(@TypeOf(vec_a), @TypeOf(vec_b));
+//
+//    return .{
+//        vec_a[1] * vec_b[2] - vec_a[2] * vec_b[1],
+//        vec_a[2] * vec_b[0] - vec_a[0] * vec_b[2],
+//        vec_a[0] * vec_b[1] - vec_a[1] * vec_b[0],
+//    };
+//}
+//
+//test cross {}
 
-    return .{
-        vec_a[1] * vec_b[2] - vec_a[2] * vec_b[1],
-        vec_a[2] * vec_b[0] - vec_a[0] * vec_b[2],
-        vec_a[0] * vec_b[1] - vec_a[1] * vec_b[0],
-    };
-}
+///// Normalize vector `vec`.
+///// Asserts `vec` to be a vector.
+///// Compute - moderate
+//pub inline fn norm(vec: anytype, comptime exec_mode: ExecMode) @TypeOf(vec) {
+//    comptime assertType(@TypeOf(vec), .{.Vector}, @src().fn_name ++ ".vec");
+//    return vec / @as(@TypeOf(vec), @splat(length(vec, exec_mode)));
+//}
+//
+//test norm {
+//    const V = @Vector(3, f32);
+//    const v: V = .{ 3, 4, 0 };
+//    const result: V = norm(v, .Safe);
+//    const expect: V = .{ 0.6, 0.8, 0 };
+//
+//    try expectEqual(expect[0], result[0]);
+//    try expectEqual(expect[1], result[1]);
+//    try expectEqual(expect[2], result[2]);
+//}
 
-test cross {}
-
-/// Normalize vector `vec`.
-/// Asserts `vec` to be a vector.
-/// Compute - moderate
-pub inline fn norm(vec: anytype, comptime exec_mode: ExecMode) @TypeOf(vec) {
-    comptime assertType(@TypeOf(vec), .{.Vector}, @src().fn_name ++ ".vec");
-    return vec / @as(@TypeOf(vec), @splat(length(vec, exec_mode)));
-}
-
-test norm {
-    const V = @Vector(3, f32);
-    const v: V = .{ 3, 4, 0 };
-    const result: V = norm(v, .Safe);
-    const expect: V = .{ 0.6, 0.8, 0 };
-
-    try expectEqual(expect[0], result[0]);
-    try expectEqual(expect[1], result[1]);
-    try expectEqual(expect[2], result[2]);
-}
-
-/// Get the length of vector `vec`.
-/// Asserts `vec` to be a vector.
-/// Compute - moderate
-pub inline fn length(vec: anytype, comptime exec_mode: ExecMode) f32 {
-    comptime assertType(@TypeOf(vec), .{.Vector}, @src().fn_name ++ ".vec");
-    return @sqrt(dot(vec, vec, exec_mode));
-}
-
-test length {
-    const V = @Vector(3, u8);
-    const vec: V = .{ 1, 2, 2 };
-    try expectEqual(3.0, length(vec, .Safe));
-}
+///// Get the length of vector `vec`.
+///// Asserts `vec` to be a vector.
+///// Compute - moderate
+//pub inline fn length(vec: anytype, comptime exec_mode: ExecMode) f32 {
+//    comptime assertType(@TypeOf(vec), .{.Vector}, @src().fn_name ++ ".vec");
+//    return @sqrt(dot(vec, vec, exec_mode));
+//}
+//
+//test length {
+//    const V = @Vector(3, u8);
+//    const vec: V = .{ 1, 2, 2 };
+//    try expectEqual(3.0, length(vec, .Safe));
+//}

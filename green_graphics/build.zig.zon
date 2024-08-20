@@ -7,9 +7,9 @@
         },
     },
     .paths = .{
-        "build.zig",
-        "build.zig.zon",
-        "root.zig",
-        "src",
+        "./build.zig",
+        "./build.zig.zon",
+        "./root.zig",
+        "./src",
     },
 }

@@ -18,7 +18,7 @@ const expectError = std.testing.expectError;
 /// Issue key specs:
 /// - Throws error when result would overflow `T`.
 pub inline fn safeAdd(comptime T: type, int_a: T, int_b: T) !T {
-    @setRuntimeSafety(false); // * removes testing of-flag twice in asm
+    @setRuntimeSafety(false); // * removes testing of-flag twice in asm (ReleaseSafe)
     comptime assertType(T, .{ .Int, .ComptimeInt });
     switch (T) { // * comptime branch prune
         comptime_int => return int_a + int_b,
@@ -43,7 +43,7 @@ test safeAdd {
 /// Issue key specs:
 /// - Throws error when result would overflow `T`.
 pub inline fn safeMul(comptime T: type, int_a: T, int_b: T) !T {
-    @setRuntimeSafety(false); // * removes testing of-flag twice in asm
+    @setRuntimeSafety(false); // * removes testing of-flag twice in asm (ReleaseSafe)
     comptime assertType(T, .{ .Int, .ComptimeInt });
     switch (T) { // * comptime branch prune
         comptime_int => return int_a * int_b,
@@ -73,7 +73,7 @@ test safeMul {
 /// Issue key specs:
 /// - Throws error when result would overflow `T`.
 pub inline fn safeSub(comptime T: type, int_a: T, int_b: T) !T {
-    @setRuntimeSafety(false); // * removes testing of-flag twice in asm
+    @setRuntimeSafety(false); // * removes testing of-flag twice in asm (ReleaseSafe)
     comptime assertType(T, .{ .Int, .ComptimeInt });
     switch (T) { // * comptime branch prune
         comptime_int => return int_a - int_b,

@@ -1,6 +1,6 @@
 //! Author: palsmo
 //! Status: In Progress
-//! About: XServer Window Handler
+//! About: X11 Window Handler
 
 const std = @import("std");
 const c = @cImport({
@@ -13,10 +13,9 @@ const mod_shared = @import("./shared.zig");
 
 const XClientError = mod_shared.XClientError;
 const assertAndMsg = maple.assert.misc.assertAndMsg;
-const expectEqual = std.testing.expectEqual;
 const panic = std.debug.panic;
 
-/// Handler for an X11 window.
+/// X11 window handler.
 pub const WindowHandler = struct {
     const Self = @This();
 
@@ -48,17 +47,19 @@ pub const WindowHandler = struct {
     /// Issue key specs:
     /// - Throws error when connection process fail.
     pub fn init(options: Options) !Self {
+        // setup xserver connection?
         const x_connection = c.XOpenDisplay(options.display_str) orelse {
             return XClientError.FailedToEstablishConnectionWithServer;
         };
+        // retrieve default screen, retrieve parent window
         const screen_id = c.XDefaultScreen(x_connection);
         const window_parent_id = options.window_parent_id orelse c.XRootWindow(x_connection, screen_id);
-
+        // setup window attributes
         var set_attributes: c.XSetWindowAttributes = .{
             .background_pixel = c.XBlackPixel(x_connection, screen_id),
             .event_mask = c.ExposureMask | c.KeyPressMask,
         };
-
+        // form X11 window
         const window_id = c.XCreateWindow(
             x_connection,
             window_parent_id,
@@ -70,12 +71,13 @@ pub const WindowHandler = struct {
             c.CopyFromParent, // depth
             c.InputOutput, // class
             null, // visual
-            c.CWBackPixel | c.CWEventMask,
+            c.CWBackPixel | c.CWEventMask, // attribute mask
             &set_attributes,
         );
 
+        // get all window attributes
         var attributes: c.XWindowAttributes = undefined;
-        _ = c.XGetWindowAttributes(x_connection, window_id, &attributes); // status irrelevant
+        _ = c.XGetWindowAttributes(x_connection, window_id, &attributes);
 
         return .{
             .x_connection = x_connection,
@@ -93,7 +95,7 @@ pub const WindowHandler = struct {
         self.assertInitialized();
         const status_xdw = c.XDestroyWindow(self.x_connection, self.window_id);
         if (status_xdw == c.BadWindow) panic("Tried to act on invalid window '{}'.", .{self.window_id});
-        _ = c.XCloseDisplay(self.x_connection); // status irrelevant
+        _ = c.XCloseDisplay(self.x_connection);
         self.metaSetInitialized(false);
     }
 
@@ -140,7 +142,10 @@ pub const WindowHandler = struct {
     pub fn refreshCachedAttributes(self: *Self) void {
         self.assertInitialized();
         const status_xgwa = c.XGetWindowAttributes(self.x_connection, self.window_id, &self.attributes_cached);
-        if (status_xgwa == c.BadWindow) panic("Tried to act on invalid window '{}'.", .{self.window_id});
+        switch (status_xgwa) {
+            c.BadDrawable, c.BadWindow => panic("Tried to act on invalid window '{}'.", .{self.window_id}),
+            else => unreachable,
+        }
     }
 
     /// Get coordinate tuple for window's top-left corner (inside border).
@@ -154,9 +159,27 @@ pub const WindowHandler = struct {
     /// Get dimension tuple for the window's size (outside border).
     /// Issue key specs:
     /// - Panic when `self` hasn't been initialized.
-    pub fn getWH(self: *const Self) struct { w: c_uint, h: c_uint } {
+    pub inline fn getWH(self: *const Self) struct { w: c_uint, h: c_uint } {
         self.assertInitialized();
         return .{ .w = self.attributes_cached.width, .h = self.attributes_cached.height };
+    }
+
+    /// Assign `title` to the window (window manager can display in some prominent place).
+    /// Issue key specs:
+    /// - Panic when `self` hasn't been initialized.
+    /// - Throws error when server allocation process fail.
+    pub inline fn setTitle(self: *const Self, title: [*c]const u8) !void {
+        const status_xsn = c.XStoreName(self.x_connection, self.window_id, title);
+        switch (status_xsn) {
+            c.Success => {},
+            c.BadAlloc => return XClientError.FailedToAllocateRequestedResource,
+            c.BadWindow => panic("Tried to act on invalid window '{}'.", .{self.window_id}),
+            else => |val| {
+                std.debug.print("{}\n", .{val});
+                unreachable;
+            },
+        }
+        _ = c.XFlush(self.x_connection);
     }
 
     /// Show the window.
@@ -166,9 +189,13 @@ pub const WindowHandler = struct {
     pub fn open(self: *Self) void {
         self.assertInitialized();
         if (self.metaIsOpen()) panic("Invalid call to 'open' window, has no effect since the window is already open.", .{});
-        const status_xmw = c.XMapWindow(self.x_connection, self.window_id); // status irrelevant
-        if (status_xmw == c.BadWindow) panic("Tried to act on invalid window '{}'.", .{self.window_id});
-        _ = c.XFlush(self.x_connection); // status irrelevant
+        const status_xmw = c.XMapWindow(self.x_connection, self.window_id);
+        switch (status_xmw) {
+            c.Success => {},
+            c.BadWindow => panic("Tried to act on invalid window '{}'.", .{self.window_id}),
+            else => unreachable,
+        }
+        _ = c.XFlush(self.x_connection);
         self.refreshCachedAttributes(); // 'map_state' changes, (os may also have modified)
         self.metaSetOpen(true);
     }
@@ -181,8 +208,12 @@ pub const WindowHandler = struct {
         self.assertInitialized();
         if (!self.metaIsOpen()) panic("Invalid call to 'close' window, has no effect since the window is already closed.", .{});
         const status_xuw = c.XUnmapWindow(self.x_connection, self.window_id);
-        if (status_xuw == c.BadWindow) panic("Tried to act on invalid window '{}'.", .{self.window_id});
-        _ = c.XFlush(self.x_connection); // status irrelevant
+        switch (status_xuw) {
+            c.Success => {},
+            c.BadWindow => panic("Tried to act on invalid window '{}'.", .{self.window_id}),
+            else => unreachable,
+        }
+        _ = c.XFlush(self.x_connection);
         self.refreshCachedAttributes(); // 'map_state' changes
         self.metaSetOpen(false);
     }
@@ -198,8 +229,12 @@ pub const WindowHandler = struct {
         const _x = x orelse self.attributes_cached.x;
         const _y = y orelse self.attributes_cached.y;
         const status_xmw = c.XMoveWindow(self.x_connection, self.window_id, _x, _y);
-        if (status_xmw == c.BadWindow) panic("Tried to act on invalid window '{}'.", .{self.window_id});
-        _ = c.XFlush(self.x_connection); // status irrelevant
+        switch (status_xmw) {
+            c.Success => {},
+            c.BadWindow => panic("Tried to act on invalid window '{}'.", .{self.window_id}),
+            else => unreachable,
+        }
+        _ = c.XFlush(self.x_connection);
         self.refreshCachedAttributes(); // 'x' and 'y' changes, (os may also have modified)
     }
 
@@ -214,8 +249,12 @@ pub const WindowHandler = struct {
         const _w = w orelse @as(c_uint, @intCast(self.attributes_cached.width)); // for some reason 'width' is c_int here
         const _h = h orelse @as(c_uint, @intCast(self.attributes_cached.height)); // for some reason 'height' is c_int here
         const status_xrw = c.XResizeWindow(self.x_connection, self.window_id, _w, _h);
-        if (status_xrw == c.BadWindow) panic("Tried to act on invalid window '{}'.", .{self.window_id});
-        _ = c.XFlush(self.x_connection); // status irrelevant
+        switch (status_xrw) {
+            c.Success => {},
+            c.BadWindow => panic("Tried to act on invalid window '{}'.", .{self.window_id}),
+            else => unreachable,
+        }
+        _ = c.XFlush(self.x_connection);
         self.refreshCachedAttributes(); // 'width' and 'height' changes, (os may also have modified)
     }
 
@@ -227,8 +266,12 @@ pub const WindowHandler = struct {
         self.assertInitialized();
         if (!self.metaIsOpen()) panic("Invalid call to `raise` window, has no effect since the window is closed.", .{});
         const status_xrw = c.XRaiseWindow(self.x_connection, self.window_id);
-        if (status_xrw == c.BadWindow) panic("Tried to act on invalid window '{}'.", .{self.window_id});
-        _ = c.XFlush(self.x_connection); // status irrelevant
+        switch (status_xrw) {
+            c.Success => {},
+            c.BadWindow => panic("Invalid call to `raise` window, has no effect since the window is closed.", .{}),
+            else => unreachable,
+        }
+        _ = c.XFlush(self.x_connection);
         // z-value is not stored as part of 'XWindowAttributes'
     }
 
@@ -238,8 +281,12 @@ pub const WindowHandler = struct {
     pub fn raiseAll(self: *const Self) void {
         self.assertInitialized();
         const status_xmr = c.XMapRaised(self.x_connection, self.window_id);
-        if (status_xmr == c.BadWindow) panic("Tried to act on invalid window '{}'.", .{self.window_id});
-        _ = c.XFlush(self.x_connection); // status irrelevant
+        switch (status_xmr) {
+            c.Success => {},
+            c.BadWindow => panic("Tried to act on invalid window '{}'.", .{self.window_id}),
+            else => unreachable,
+        }
+        _ = c.XFlush(self.x_connection);
         // z-value is not stored as part of 'XWindowAttributes'
     }
 
@@ -247,10 +294,12 @@ pub const WindowHandler = struct {
     /// * not guaranteed to catch all connection issues.
     pub fn statusConnection(self: *const Self) c_int {
         self.assertInitialized();
-        _ = c.XSync(self.x_connection, 0); // try communicate, may reveal issues, status irrelevant
+        _ = c.XSync(self.x_connection, 0); // try communicate, may reveal issues
         return c.XConnectionNumber(self.x_connection); // return connection status
     }
 };
+
+const expectEqual = std.testing.expectEqual;
 
 test WindowHandler {
     var window = try WindowHandler.init(.{});
@@ -260,6 +309,7 @@ test WindowHandler {
     try expectEqual(true, window.statusConnection() != 1);
     try expectEqual(false, window.metaIsOpen());
 
+    try window.setTitle("Test Window X11");
     window.open();
 
     //try expectEqual(true, window.metaIsOpen());

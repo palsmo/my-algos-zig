@@ -1,10 +1,10 @@
 //! Author: palsmo
 //! Status: In Progress
-//! About: XServer Window Handler
+//! About: X11 Window Handler
 
 const std = @import("std");
 const c = @cImport({
-    @cInclude("X11/Xlib.h");
+    @cInclude("xcb/xcb.h");
 });
 
 const maple = @import("maple_utils");
@@ -13,218 +13,296 @@ const mod_shared = @import("./shared.zig");
 
 const XClientError = mod_shared.XClientError;
 const assertAndMsg = maple.assert.misc.assertAndMsg;
-const expectEqual = std.testing.expectEqual;
 const panic = std.debug.panic;
 
+/// A lightweight X11 window handler.
+/// Uses the 'XCB'-api under the hood.
 pub const WindowHandler = struct {
     const Self = @This();
 
     pub const Options = struct {
-        // hostname:number.screen_number, 'null' = value of DISPLAY env_var
-        display_spec: [*c]const u8 = null,
+        // display identifier, 'null' = value of DISPLAY env_var
+        display_label: [*c]const u8 = null,
         // parent window, 'null' = root window
-        window_parent_id: ?c.Window = null,
+        window_parent_id: ?c.xcb_window_t = null,
+        // border width (only suggestion, os may overwrite)
+        border_width: u16 = 0,
+        // position (outside) for window's top-left corner, (only suggestion, os may overwrite)
+        position: struct { x: i16, y: i16 } = .{ .x = 100, .y = 100 },
+        // dimension (inside) for window, (only suggestion, os may overwrite)
+        dimension: struct { w: u16, h: u16 } = .{ .w = 800, .h = 600 },
     };
 
     // struct fields
-    x_connection: *c.Display,
-    screen_id: c_int,
-    window_parent_id: c.Window,
-    window_id: ?c.Window,
+    connection: *c.xcb_connection_t,
+    screen_data: *c.xcb_screen_t,
+    window_id: c.xcb_window_t,
+    metadata: u16,
 
-    is_initialized: bool = false,
+    const meta_msk_is_init: u8 = 0b0000_0000_0000_0001;
+    const meta_msk_is_open: u8 = 0b0000_0000_0000_0010;
 
-    /// Initialize the handler by connecting to Xserver.
+    /// Initialize the handler.
     /// Issue key specs:
-    /// - Throws error when connection process fail.
+    /// - Throws error when server connection process fail.
     pub fn init(options: Options) !Self {
-        const x_connection = c.XOpenDisplay(options.display_spec) orelse {
-            return XClientError.FailedToEstablishConnectionWithServer;
-        };
-        const screen_id = c.XDefaultScreen(x_connection);
-        const window_parent_id = options.window_parent_id orelse c.XRootWindow(x_connection, screen_id);
+        // setup
+        const connection = c.xcb_connect(options.display_label, null) orelse return XClientError.FailedToEstablishConnectionWithServer;
+        const screen_data = c.xcb_setup_roots_iterator(c.xcb_get_setup(connection)).data;
+        const window_parent_id = options.window_parent_id orelse screen_data.*.root;
+
+        // create window
+        const window_id = c.xcb_generate_id(connection);
+        _ = c.xcb_create_window(
+            connection, // struct rep. connection
+            c.XCB_COPY_FROM_PARENT, // depth
+            window_id, // self
+            window_parent_id, // parent
+            options.position.x, // x
+            options.position.y, // y
+            options.dimension.w, // w
+            options.dimension.h, // h
+            options.border_width, // border width
+            c.XCB_WINDOW_CLASS_INPUT_OUTPUT, // class
+            screen_data.*.root_visual, // visual
+            0, // value/attribute mask
+            null, // value/attribute struct
+        );
 
         return .{
-            .x_connection = x_connection,
-            .screen_id = screen_id,
-            .window_parent_id = window_parent_id,
-            .window_id = null,
-            .is_initialized = true,
+            .connection = connection,
+            .screen_data = screen_data,
+            .window_id = window_id,
+            .metadata = meta_msk_is_init,
         };
     }
 
-    /// Issue key specs:
-    /// - Panic when `self.window_id` isn't a defined *c.Window*.
-    pub fn deinit(self: *WindowHandler) void {
-        if (!self.is_initialized) return;
-
-        const window_id = self.window_id orelse panic("Tried to destroy invalid window 'null'.", .{});
-        const status_xdw = c.XDestroyWindow(self.x_connection, window_id);
-        if (status_xdw == c.BadWindow) panic("Tried to destroy invalid window '{}'.", .{window_id});
-        _ = c.XCloseDisplay(self.x_connection); // status irrelevant
-
-        self.is_initialized = false;
+    /// Destroy the window and disconnect from the server.
+    pub fn deinit(self: *Self) void {
+        self.assertInit();
+        _ = c.xcb_destroy_window(self.connection, self.window_id);
+        c.xcb_disconnect(self.connection);
+        self.metaReset();
     }
 
     /// Assert that `self` has called 'init'.
     /// Issue key specs:
     /// - Panic when `self` hasn't been initialized.
-    pub inline fn assertInitialized(self: *const Self) void {
-        assertAndMsg(self.is_initialized, "WindowHandler hasn't been initialized (call 'init').", .{});
+    /// * most often no reason for the user to call.
+    pub inline fn assertInit(self: *const Self) void {
+        assertAndMsg(self.metaIsInit(), "WindowHandler hasn't been initialized (call 'init' first).", .{});
     }
 
-    /// Assert that 'self.window_id' isn't *null*.
-    pub inline fn assertHasWindow(self: *const Self) void {
-        assertAndMsg(self.window_id != null, "Can't act on undefined 'self.window_id'.", .{}); // TODO
+    /// Reset handler's metadata to zero.
+    /// * most often no reason for the user to call.
+    pub inline fn metaReset(self: *Self) void {
+        self.metadata = 0;
     }
 
-    /// Set the x-coordinate position.
-    pub fn setX(self: *Self, px: c_int) void {
-        self.assertHasWindow();
-        c.XMoveWindow(self.x_connection, window_id, x, y);
+    /// Check handler's init status.
+    /// * most often no reason for the user to call.
+    pub inline fn metaInitStatus(self: *const Self) bool {
+        return meta_msk_is_init == (self.metadata & meta_msk_is_init);
     }
 
-    /// Get the x-coordinate position.
-    pub fn getX(self: *Self) c_int {
-        self.assertHasWindow();
-        const window_id = self.window_id orelse panic("Tried to read attribute of invalid window 'null'.", .{});
-        const attrs: c.XWindowAttributes = undefined;
-        const status_xgwa = c.XGetWindowAttributes(self.x_connection, window_id, &attrs);
-        if (status_xgwa != c.BadWindow) panic("Tried to read attribute of invalid window '{}'.", .{window_id});
+    /// Set window's open status (set bit in `self.metadata` to `b`).
+    /// * most often no reason for the user to call.
+    pub inline fn metaOpenSet(self: *Self, b: bool) void {
+        if (b) self.metadata |= meta_msk_is_open else self.metadata &= ~meta_msk_is_open;
     }
 
-    pub const OptionsOpenSimple = struct {
-        // position within screen
-        pos: struct { x: c_int, y: c_int } = .{ .x = 0, .y = 0 },
-        // window dimensions
-        dim: struct { w: c_uint, h: c_uint } = .{ .w = 800, .h = 600 },
-        border_width: c_uint = 0,
-        border_color: ?c_ulong = null,
-        backround_color: ?c_ulong = null,
-        // * os may overwrite any of these
-    };
+    /// Check the window's open status.
+    pub inline fn metaOpenStatus(self: *const Self) bool {
+        return meta_msk_is_open == (self.metadata & meta_msk_is_open);
+    }
 
-    /// Open simple `self` window.
+    /// Get the identifier of the window.
+    pub inline fn getId(self: *const Self) c.xcb_window_t {
+        return self.window_id;
+    }
+
+    /// Get coordinate tuple for window's top-left corner (inside border).
     /// Issue key specs:
-    /// - Panic when `self` hasn't been initialized.
-    pub fn openSimple(self: *Self, options: OptionsOpenSimple) void {
-        const window_id = c.XCreateSimpleWindow(
-            self.x_connection,
-            self.window_parent_id,
-            options.pos.x,
-            options.pos.y,
-            options.dim.w,
-            options.dim.h,
-            options.border_width,
-            options.border_color orelse c.XWhitePixel(self.x_connection, self.screen_id),
-            options.backround_color orelse c.XBlackPixel(self.x_connection, self.screen_id),
-        );
+    /// - Returns .{ 0, 0 } if `self.window_id` was invalid.
+    pub inline fn getXY(self: *const Self) struct { x: i16, y: i16 } {
+        self.assertInit();
 
-        _ = c.XMapWindow(self.x_connection, window_id); // status irrelevant
-        _ = c.XFlush(self.x_connection); // send requests immediately, status irrelevant
+        // request data
+        var e: [*c]c.xcb_generic_error_t = null;
+        const geo_cookie = c.xcb_get_geometry(self.connection, self.window_id);
+        const geo = c.xcb_get_geometry_reply(self.connection, geo_cookie, &e);
+        if (e != null) {
+            switch (e.*.error_code) {
+                c.XCB_DRAWABLE, c.XCB_WINDOW => return .{ 0, 0 },
+                else => unreachable,
+            }
+        }
 
-        self.window_id = window_id;
+        return .{ .x = geo.*.x, .y = geo.*.y };
     }
 
-    pub const OptionsOpenDetailed = struct {
-        // window title, 'null' = no title
-        title: [*c]const u8 = null,
-        // position within screen
-        pos: struct { x: c_int, y: c_int } = .{ .x = 0, .y = 0 },
-        // window dimensions
-        dim: struct { w: c_uint, h: c_uint } = .{ .w = 800, .h = 600 },
-        border_width: c_uint = 0,
-        depth: c_int = c.CopyFromParent,
-        class: c_uint = c.InputOutput,
-        visual: ?*c.Visual = null,
-        valuemask: c_ulong = c.CWBackPixel | c.CWBorderPixel | c.CWEventMask,
-        attributes: ?c.XSetWindowAttributes = null,
-    };
-
-    /// Open detailed `self` window.
-    pub fn openDetailed(self: *Self, options: OptionsOpenDetailed) void {
-        const window_id = c.XCreateWindow(
-            self.x_connection,
-            self.window_parent_id,
-            options.pos.x,
-            options.pos.y,
-            options.dim.w,
-            options.dim.h,
-            options.border_width,
-            options.depth,
-            options.class,
-            options.visual,
-            options.valuemask,
-            options.attributes,
-        );
-
-        _ = c.XStoreName(self.x_connection, window_id, options.title); // status irrelevant
-        _ = c.XMapWindow(self.x_connection, window_id); // status irrelevant
-        _ = c.XFlush(self.x_connection);
-
-        self.window_id = window_id;
-    }
-
-    /// Close `self` window.
+    /// Get dimension tuple for the window's size (outside border).
     /// Issue key specs:
-    /// - Panic when `self` hasn't been initialized.
-    /// - Panic when `self.window_id` isn't a defined *c.Window*.
-    pub fn close(self: *Self) void {
-        const window_id = self.window_id orelse panic("Tried to destroy invalid window 'null'.", .{});
+    /// - Returns .{ 0, 0 } if `self.window_id` was invalid.
+    pub inline fn getWH(self: *const Self) struct { w: u16, h: u16 } {
+        self.assertInit();
 
-        const status_xdw = c.XDestroyWindow(self.x_connection, window_id);
-        if (status_xdw == c.BadWindow) panic("Tried to destroy invalid window '{}'.", .{window_id});
-        _ = c.XFlush(self.x_connection); // send requests immediately, status irrelevant
+        // request data
+        var e: [*c]c.xcb_generic_error_t = null;
+        const geo_cookie = c.xcb_get_geometry(self.connection, self.window_id);
+        const geo = c.xcb_get_geometry_reply(self.connection, geo_cookie, &e);
+        if (e != null) {
+            switch (e.*.error_code) {
+                c.XCB_DRAWABLE, c.XCB_WINDOW => return .{ 0, 0 },
+                else => unreachable,
+            }
+        }
 
-        self.window_id = null;
+        return .{ .w = geo.*.width, .h = geo.*.height };
     }
 
-    /// Raise `self` to appear in front.
-    /// Issue key specs:
-    /// - Panic when `self` hasn't been initialized.
-    /// - Panic when `self.window_id` isn't a defined *c.Window*.
-    pub fn raise(self: *Self) void {
-        assertAndMsg(self.is_initialized, "WindowHandler hasn't been initialized (call 'init').", .{});
-
-        const window_id = self.window_id orelse panic("Tried to raise invalid window 'null'.", .{});
-        const status_xrw = c.XRaiseWindow(self.x_connection, window_id);
-        if (status_xrw != c.BadWindow) panic("Tried to raise invalid window '{}'.", .{window_id});
-        _ = c.XFlush(self.x_connection); // send requests immediately, status irrelevant
-    }
-
-    /// Raise `self` and windows with `self` as parent to appear in front.
-    /// Issue key specs:
-    /// - Panic when `self` han't been initialized.
-    /// - Panic when `self.window_id` isn't a defined *c.Window*.
-    pub fn raiseAll(self: *Self) void {
-        assertAndMsg(self.is_initialized, "WindowHandler hasn't been initialized (call 'init').", .{});
-
-        const window_id = self.window_id orelse panic("Tried to raise invalid window 'null'.", .{});
-        const status_xmr = c.XMapRaised(self.x_connection, window_id);
-        if (status_xmr != c.BadWindow) panic("Tried to raise invalid window '{}'.", .{window_id});
-        _ = c.XFlush(self.x_connection); // send requests immediately, status irrelevant
-    }
-
-    /// Simple check to verify connection with XServer.
+    /// Simple check to verify connection with the server.
     /// * not guaranteed to catch all connection issues.
-    pub fn checkConnection(self: *const Self) bool {
-        if (!self.is_initialized) return false;
-        _ = c.XSync(self.x_connection, 0); // communicate with server, may reveal issues, status irrelevant
-        return c.XConnectionNumber(self.x_connection) != -1; // checks if connection still appears valid
+    pub fn statusConnection(self: *const Self) c_int {
+        self.assertInit();
+        return c.xcb_connection_has_error(self.connection);
     }
+
+    /// Show the window on screen.
+    /// Issue key specs:
+    /// - Return-code 0 (ok) always.
+    pub fn open(self: *Self) u8 {
+        self.assertInit();
+        if (self.metaIsOpen()) return 0;
+
+        _ = c.xcb_map_window(self.connection, self.window_id);
+        _ = c.xcb_flush(self.connection);
+
+        self.metaSetOpen(true);
+        return 0;
+    }
+
+    /// Remove the window from screen.
+    /// Issue key specs:
+    /// - Return-code 0 (ok) always.
+    pub fn close(self: *Self) u8 {
+        self.assertInit();
+        if (!self.metaIsOpen()) return 0;
+
+        _ = c.xcb_unmap_window(self.connection, self.window_id);
+        _ = c.xcb_flush(self.connection);
+
+        self.metaSetOpen(false);
+        return 0;
+    }
+    /// Set position `x` and `y` for the window's top-left corner (border excluded).
+    /// Value of *null* will have no change in that direction.
+    /// Issue key specs:
+    /// - Return-code 0 (ok) or 1 (warn) if `self.window_id` was invalid.
+    pub fn move(self: *Self, x: ?c_int, y: ?c_int) u8 {
+        self.assertInit();
+        if (!self.metaIsOpen()) return 0;
+
+        const geo: ?[*c]c.xcb_get_geometry_reply_t = b: {
+            if (x == null or y == null) {
+                // request data
+                var e: [*c]c.xcb_generic_error_t = null;
+                const geo_cookie = c.xcb_get_geometry(self.connection, self.window_id);
+                const geo = c.xcb_get_geometry_reply(self.connection, geo_cookie, &e);
+                if (e != null) {
+                    switch (e.*.error_code) {
+                        c.XCB_DRAWABLE, c.XCB_WINDOW => return 1,
+                        else => unreachable,
+                    }
+                }
+                break :b geo;
+            } else {
+                break :b null;
+            }
+        };
+
+        const value_mask = c.XCB_CONFIG_WINDOW_X | c.XCB_CONFIG_WINDOW_Y;
+        const value_list = [_]i16{ x orelse geo.?.*.x, y orelse geo.?.*.y };
+        _ = c.xcb_configure_window(self.connection, self.window_id, value_mask, &value_list);
+        _ = c.xcb_flush(self.connection);
+
+        return 0;
+    }
+
+    /// Set dimension `w` and `h` for the window (border is included).
+    /// Value of *null* will have no change in that direction.
+    /// Issue key specs:
+    /// - Return-code 0 (ok) or 1 (warn) if `self.window_id` was invalid.
+    pub fn resize(self: *Self, w: ?c_uint, h: ?c_uint) u8 {
+        self.assertInit();
+        if (!self.metaIsOpen()) return 0;
+
+        const geo: ?[*c]c.xcb_get_geometry_reply_t = b: {
+            if (w == null or h == null) {
+                // request data
+                var e: [*c]c.xcb_generic_error_t = null;
+                const geo_cookie = c.xcb_get_geometry(self.connection, self.window_id);
+                const geo = c.xcb_get_geometry_reply(self.connection, geo_cookie, &e);
+                if (e != null) {
+                    switch (e.*.error_code) {
+                        c.XCB_DRAWABLE, c.XCB_WINDOW => return 1,
+                        else => unreachable,
+                    }
+                }
+                break :b geo;
+            } else {
+                break :b null;
+            }
+        };
+
+        const value_mask = c.XCB_CONFIG_WINDOW_WIDTH | c.XCB_CONFIG_WINDOW_HEIGHT;
+        const value_list = [_]u16{ w orelse geo.?.*.width, h orelse geo.?.*.height };
+        _ = c.xcb_configure_window(self.connection, self.window_id, value_mask, &value_list);
+        _ = c.xcb_flush(self.connection);
+
+        return 0;
+    }
+
+    /// Raise the window to appear in front on screen.
+    /// Issue key specs:
+    /// - Return-code 0 (ok) always.
+    pub fn raise(self: *const Self) u8 {
+        self.assertInit();
+        if (!self.metaIsOpen()) return 0;
+
+        const value_mask = c.XCB_CONFIG_WINDOW_STACK_MODE;
+        const value_list = [_]c_int{c.XCB_STACK_MODE_ABOVE};
+        _ = c.xcb_configure_window(self.connection, self.window_id, value_mask, &value_list);
+        _ = c.xcb_flush(self.connection);
+
+        return 0;
+    }
+
+    // Set the background color and transparency of the window.
+    // `color` is in RGBA format where each component is in the range 0-255.
+    // `alpha` is in the range 0-255, where 0 is fully transparent and 255 is fully opaque.
+    //pub fn setBackground(self: *const Self, color: struct { r: u8, g: u8, b: u8 }, alpha: u8) void {
+    //    self.assertInit();
+    //    if (!self.metaIsOpen()) return error.WindowNotOpen;
+    //    _ = color;
+    //    _ = alpha;
+    //}
 };
+
+const expectEqual = std.testing.expectEqual;
 
 test WindowHandler {
     var window_handler = try WindowHandler.init(.{});
     defer window_handler.deinit();
 
-    window_handler.assertInitialized();
-    window_handler.openDetailed(.{ .title = "My Detailed Window" });
+    try expectEqual(0, window_handler.statusConnection());
+    try expectEqual(true, window_handler.metaIsInit());
+    try expectEqual(false, window_handler.metaIsOpen());
 
-    // keep the window open for a few seconds
-    std.time.sleep(10 * std.time.ns_per_s);
+    const rc_open = window_handler.open();
 
-    //try expectEqual(true, window_handler.checkConnection());
-    //window_handler.deinit();
-    //try expectEqual(false, window_handler.checkConnection());
+    try expectEqual(0, rc_open);
+    try expectEqual(true, window_handler.metaIsOpen());
+
+    std.time.sleep(5 * std.time.ns_per_s);
 }

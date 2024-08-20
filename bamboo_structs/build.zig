@@ -1,5 +1,6 @@
 //! Author: palsmo
 //! Status: Done
+//! About: Bamboo Structs Build Script
 
 const std = @import("std");
 
@@ -18,20 +19,21 @@ pub fn build(b: *std.Build) void {
 
     // dependencies -->
 
-    const dep_maple_utils = b.dependency("maple_utils", .{
+    // maple
+    const dep_mapleutils = b.dependency("maple_utils", .{
         .target = target,
         .optimize = optimize,
     }).module("root");
 
     // public modules -->
 
+    // root
     const mod_pub_root = b.addModule("root", .{
         .root_source_file = b.path("./root.zig"),
         .target = target,
         .optimize = optimize,
     });
-
-    mod_pub_root.addImport("maple_utils", dep_maple_utils);
+    mod_pub_root.addImport("maple_utils", dep_mapleutils);
 
     // testing -->
 
@@ -45,7 +47,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
 
-        test_compile.root_module.addImport("maple_utils", dep_maple_utils);
+        test_compile.root_module.addImport("maple_utils", dep_mapleutils);
 
         const test_artifact = b.addRunArtifact(test_compile);
         test_step.dependOn(&test_artifact.step);

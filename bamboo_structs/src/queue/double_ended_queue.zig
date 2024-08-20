@@ -1,5 +1,5 @@
 //! Author: palsmo
-//! Status: Done
+//! Status: In Progress
 //! About: Double Ended Queue Data Structure
 //! Read: https://en.wikipedia.org/wiki/Double-ended_queue
 
@@ -18,6 +18,7 @@ const assertAndMsg = maple.assert.assertAndMsg;
 const assertComptime = maple.assert.assertComptime;
 const assertPowerOf2 = maple.assert.assertPowOf2;
 const fastMod = maple.math.fastMod;
+const nextPowerOf2 = maple.math.nextPowerOf2;
 const wrapDecrement = maple.math.wrapDecrement;
 const wrapIncrement = maple.math.wrapIncrement;
 
@@ -64,8 +65,9 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         size: usize = 0,
         options: Options,
         allocator: ?Allocator,
+        metadata: u16,
 
-        is_initialized: bool = false,
+        const meta_msk_is_init: u8 = 0b0000_0000_0000_0001;
 
         /// Initialize the queue with the active `memory_mode` branch (read more _MemoryMode_).
         ///
@@ -75,7 +77,7 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// .Buffer   | fn (buf: []T, comptime options: Options) Self
         /// .Comptime | fn (comptime options: Options) Self
         /// ----------------------------------------------------------------------------------------
-        pub const init = switch (memory_mode) {
+        pub const init = switch (memory_mode) { // * comptime branch prune
             .Alloc => initAlloc,
             .Buffer => initBuffer,
             .Comptime => initComptime,
@@ -83,8 +85,8 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
 
         /// Initialize the queue for using heap allocation.
         /// Issue key specs:
-        /// - Panics when 'options.init\_capacity' is zero, or not a power of 2.
-        /// - Throws error when allocation process fail.
+        /// - Panic when 'options.init\_capacity' is zero, or not a power of 2.
+        /// - Throw error when allocation process fail.
         inline fn initAlloc(allocator: Allocator, comptime options: Options) !Self {
             comptime assertAndMsg(options.init_capacity > 0, "Can't initialize with zero size.", .{});
             comptime assertPowerOf2(options.init_capacity);
@@ -93,13 +95,13 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
                 .buffer = try allocator.alloc(T, options.init_capacity),
                 .options = options,
                 .allocator = allocator,
-                .is_initialized = true,
+                .metadata = meta_msk_is_init,
             };
         }
 
         /// Initialize the queue for working with user provided `buf`.
         /// Issue key specs:
-        /// - Panics when 'buf.len' is zero, or not a power of 2.
+        /// - Panic when 'buf.len' is zero, or not a power of 2.
         inline fn initBuffer(buf: []T, comptime options: Options) Self {
             assertAndMsg(buf.len > 0, "Can't initialize with zero size.", .{});
             assertPowerOf2(buf.len);
@@ -114,13 +116,13 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
                     .shrinkable = false,
                 },
                 .allocator = null,
-                .is_initialized = true,
+                .metadata = meta_msk_is_init,
             };
         }
 
         /// Initialize the queue for using comptime memory allocation.
         /// Issue key specs:
-        /// - Panics when 'options.init\_capacity' is zero, or not a power of 2.
+        /// - Panic when 'options.init\_capacity' is zero, or not a power of 2.
         inline fn initComptime(comptime options: Options) Self {
             assertComptime(@src().fn_name);
             assertAndMsg(options.init_capacity > 0, "Can't initialize with zero size.", .{});
@@ -133,59 +135,89 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
                 },
                 .options = options,
                 .allocator = null,
-                .is_initialized = true,
+                .metadata = meta_msk_is_init,
             };
         }
 
         /// Release allocated memory, cleanup routine.
         /// Issue key specs:
-        /// - Panic (only *.Buffer* and *.Comptime* `memory_mode`).
+        /// - Panic when called (only *.Buffer* and *.Comptime* `memory_mode`).
         pub fn deinit(self: *const Self) void {
-            if (!self.is_initialized) return;
             switch (memory_mode) {
+                .Buffer, .Comptime => {
+                    @compileError("The queue isn't allocated on the heap (remove call 'deinit').");
+                },
                 .Alloc => {
+                    self.assertInit();
                     const ally = self.allocator orelse unreachable;
                     ally.free(self.buffer);
-                },
-                .Buffer, .Comptime => {
-                    @compileError("Can't release, queue is not allocated on the heap (remove call 'deinit').");
+                    self.metaReset();
                 },
             }
+        }
+
+        /// Assert that `self` has called 'init'.
+        /// Issue key specs:
+        /// - Panic when `self` hasn't been initialized.
+        /// * most often no reason for the user to call.
+        pub inline fn assertInit(self: *const Self) void {
+            assertAndMsg(self.metaInitStatus(), "DoubleEndedQeueu hasn't been initialized (call 'init' first).", .{});
+        }
+
+        /// Reset queue's metadata to zero.
+        /// * most often no reason for the user to call.
+        pub inline fn metaReset(self: *Self) void {
+            self.metadata = 0;
+        }
+
+        /// Check queue's init status.
+        /// * most often no reason for the user to call.
+        pub inline fn metaInitStatus(self: *const Self) bool {
+            return meta_msk_is_init == (self.metadata & meta_msk_is_init);
         }
 
         /// Get current amount of 'T' that's buffered in the queue.
         /// Time - O(1), direct value access.
         pub inline fn capacity(self: *const Self) usize {
-            assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
+            self.assertInit();
             return self.buffer.len;
         }
 
         /// Get current amount of 'T' that's occupying the queue.
         /// Time - O(1), direct value access.
         pub inline fn length(self: *const Self) usize {
-            assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
+            self.assertInit();
             return self.size;
         }
 
         /// Check if the queue is empty.
         /// Time - O(1), direct value access.
         pub inline fn isEmpty(self: *const Self) bool {
-            assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
+            self.assertInit();
             return self.size == 0;
         }
 
         /// Check if the queue is full.
         /// Time - O(1), direct value access.
         pub inline fn isFull(self: *const Self) bool {
-            assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
+            self.assertInit();
             return self.size == self.buffer.len;
         }
 
         /// Check if `ptr` holds the address of the current 'self.buffer'.
         /// Time - O(1), direct value access.
         pub inline fn isValidRef(self: *const Self, ptr: *const []T) bool {
-            assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
+            self.assertInit();
             return ptr == &self.buffer;
+        }
+
+        /// Check if the capacity increase of `amount` would overflow *usize*.
+        /// Issue key specs:
+        /// - Return-code 0 (ok) or 1 (warn) if overflow.
+        /// * most often no reason for the user to call.
+        pub inline fn checkCapacityIncrease(self: *const Self, amount: usize) u8 {
+            _ = maple.math.safeAdd(usize, self.buffer.len, amount) catch return 1;
+            return 0;
         }
 
         /// Identical to 'pushFirst' but guaranteed to be inlined.
@@ -196,22 +228,22 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// Store an `item` first in the queue.
         /// Time - O(1)/O(n), wrap decrement to new slot, may grow.
         /// Issue key specs:
-        /// - Throws error when adding at max capacity with 'self.options.growable' set to false.
-        /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
+        /// - Throw error when adding at max capacity with 'self.options.growable' set to false.
+        /// - Throw error when resize heap allocation fail (only *.Alloc* `memory_mode`).
         /// Other:
         /// - User has manual control over the 'grow' routine (only *.Uncheck* `exec_mode`).
         pub fn pushFirst(self: *Self, item: T, comptime exec_mode: ExecMode) !void {
             // setup?
-            switch (exec_mode) {
+            switch (exec_mode) { // * comptime branch prune
                 .Uncheck => {},
                 .Safe => {
-                    assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
+                    self.assertInit();
                     if (memory_mode == .Comptime) assertComptime(@src().fn_name);
                 },
             }
 
             // grow?
-            switch (exec_mode) {
+            switch (exec_mode) { // * comptime branch prune
                 .Uncheck => {},
                 .Safe => switch (self.size < self.buffer.len) {
                     true => {},
@@ -236,17 +268,17 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         }
 
         /// Store all `items` first in the queue.
-        /// Time - O(1)/O(n).
+        /// Time - O(1)/O(n), may grow.
         /// Issue key specs:
-        /// - Throws error when required capacity would overflow *usize*.
-        /// - Throws error when queue hasn't enough capacity with 'self.options.growable' set to false.
-        /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
+        /// - Throw error when new capacity would overflow *usize*.
+        /// - Throw error when queue hasn't enough capacity with 'self.options.growable' set to false.
+        /// - Throw error when resize heap allocation fail (only *.Alloc* `memory_mode`).
         pub fn pushFirstBatch(self: *Self, items: []const T, exec_mode: ExecMode) !void {
             // setup?
-            switch (exec_mode) {
+            switch (exec_mode) { // * comptime branch prune
                 .Uncheck => {},
                 .Safe => {
-                    assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
+                    self.assertInit();
                     if (memory_mode == .Comptime) assertComptime(@src().fn_name);
                 },
             }
@@ -256,19 +288,20 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
 
             // grow?
             if (required_capacity > self.buffer.len) {
-                switch (memory_mode) {
+                switch (memory_mode) { // * comptime branch prune
                     .Buffer => return BufferError.NotEnoughSpace,
                     .Alloc, .Comptime => switch (self.options.growable) {
                         false => return BufferError.NotEnoughSpace,
                         true => {
-                            // calc how many times to double/grow the size
-                            var n = required_capacity / (self.buffer.len + 1); // * avoids extra grow routines when same
-                            //if (required_capacity >
-                            while (n > 0) : (n -= 1) try self.grow();
+                            const n = required_capacity / (self.buffer.len + 1); // * avoid extra grow routine when same
+                            const m = nextPowerOf2(n);
+                            try self.resize(self.buffer.len * m, .Before);
                         },
                     },
                 }
             }
+
+            // TODO, copy elements correct way!
 
             // update start 'head' position
             switch (self.size != 0) {
@@ -295,8 +328,8 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// Store an `item` last in the queue.
         /// Time - O(1)/O(n), wrap increment to new slot, may grow.
         /// Issue key specs:
-        /// - Throws error when adding at max capacity with 'self.options.growable' set to false.
-        /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
+        /// - Throw error when adding at max capacity with 'self.options.growable' set to false.
+        /// - Throw error when resize heap allocation fail (only *.Alloc* `memory_mode`).
         /// Other:
         /// - User has manual control over the 'grow' routine (only *.Uncheck* `exec_mode`).
         pub fn pushLast(self: *Self, item: T, comptime exec_mode: ExecMode) !void {
@@ -304,7 +337,7 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
             switch (exec_mode) {
                 .Uncheck => {},
                 .Safe => {
-                    assertAndMsg(self.is_initialized, "DoubleEndedQueue hasn't been initialized (call 'init').", .{});
+                    self.assertInit();
                     if (memory_mode == .Comptime) assertComptime(@src().fn_name);
                 },
             }
@@ -337,9 +370,9 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// Store all `items` last in the queue.
         /// Time - O(1)/O(n).
         /// Issue key specs:
-        /// - Throws error when required capacity would overflow *usize*.
-        /// - Throws error when queue hasn't enough capacity with 'self.options.growable' set to false.
-        /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
+        /// - Throw error when required capacity would overflow *usize*.
+        /// - Throw error when queue hasn't enough capacity with 'self.options.growable' set to false.
+        /// - Throw error when resize heap allocation fail (only *.Alloc* `memory_mode`).
         pub fn pushLastBatch(self: *Self, items: []const T, exec_mode: ExecMode) !void {
             // setup?
             switch (exec_mode) {
@@ -394,7 +427,7 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// Time - O(1)/O(n), wrap increment to prev slot, may shrink.
         /// Issue key specs:
         /// - Undefined behavior when queue is empty (only *.Uncheck* `exec_mode`).
-        /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
+        /// - Throw error when resize heap allocation fail (only *.Alloc* `memory_mode`).
         /// Other:
         /// - User has manual control over the 'shrink' routine (only *.Uncheck* `exec_mode`).
         pub fn popFirst(self: *Self, comptime exec_mode: ExecMode) ?T {
@@ -450,7 +483,7 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// Time - O(1)/O(n), wrap decrement to prev slot, may shrink.
         /// Issue key specs:
         /// - Undefined behavior when queue is empty (only *.Uncheck* `exec_mode`).
-        /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
+        /// - Throw error when resize heap allocation fail (only *.Alloc* `memory_mode`).
         /// Other:
         /// - User has manual control over the 'shrink' routine (only *.Uncheck* `exec_mode`).
         pub fn popLast(self: *Self, comptime exec_mode: ExecMode) ?T {
@@ -563,9 +596,9 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// Load content of `buf` into list at `side`.
         /// Time - O(n).
         /// Issue keys specs:
-        /// - Throws error when required capacity would overflow *usize*.
-        /// - Throws error when queue hasn't enough capacity with 'self.options.growable' *false*.
-        /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
+        /// - Throw error when required capacity would overflow *usize*.
+        /// - Throw error when queue hasn't enough capacity with 'self.options.growable' *false*.
+        /// - Throw error when resize heap allocation fail (only *.Alloc* `memory_mode`).
         pub fn stock(self: *Self, buf: []T, comptime side: enum { Before, After }) !void {
             _ = side;
 
@@ -624,8 +657,8 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// Copy over current content into new buffer of **twice** the size.
         /// Time - O(n), clone content.
         /// Issue key specs:
-        /// - Throws error when new capacity would overflow *usize*.
-        /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
+        /// - Throw error when new capacity would overflow *usize*.
+        /// - Throw error when resize heap allocation fail (only *.Alloc* `memory_mode`).
         pub fn grow(self: *Self) !void {
             const new_capacity = try maple.math.safeMul(usize, self.buffer.len, 2);
             try self.resize(new_capacity, .After);
@@ -634,8 +667,8 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// Copy over current content into new buffer of **half** the size.
         /// Time - O(n), clone content.
         /// Issue key specs:
-        /// - Throws error when new capacity wouldn't fit all content in queue.
-        /// - Throws error when resize allocation fail (only *.Alloc* `memory_mode`).
+        /// - Throw error when new capacity wouldn't fit all content in queue.
+        /// - Throw error when resize heap allocation fail (only *.Alloc* `memory_mode`).
         pub fn shrink(self: *Self) !void {
             const new_capacity = self.buffer.len / 2;
             try self.resize(new_capacity, .After);
@@ -644,8 +677,8 @@ pub fn DoubleEndedQueue(comptime T: type, comptime memory_mode: MemoryMode) type
         /// Copy over current content into new buffer of size `new_capacity`.
         /// Time - O(n), clone content.
         /// Issue key specs:
-        /// - Throws error when `new_capacity` wouldn't fit all content in queue.
-        /// - Throws error when allocation process fail (only *.Alloc* `memory_mode`).
+        /// - Throw error when `new_capacity` wouldn't fit all content in queue.
+        /// - Throw error when resize heap allocation fail (only *.Alloc* `memory_mode`).
         pub fn resize(self: *Self, new_capacity: usize, comptime side: enum { Before, After }) !void {
             if (new_capacity < self.size) return BufferError.NotEnoughSpace;
             assertPowerOf2(new_capacity);
