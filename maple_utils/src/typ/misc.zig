@@ -1,7 +1,9 @@
-//! Author: Palsmo
+//! Author: palsmo
 //! Status: In Progress
+//! About: ...
 
 const std = @import("std");
+const builtin = std.builtin;
 
 const mod_assert = @import("../assert/root.zig");
 
@@ -10,6 +12,28 @@ const assertFn = mod_assert.misc.assertFn;
 const assertType = mod_assert.misc.assertType;
 const expectEqual = std.testing.expectEqual;
 const panic = std.debug.panic;
+
+pub fn T_int(comptime signedness: builtin.Signedness, comptime bit_count: u16) type {
+    return @Type(.{ .Int = .{ .signedness = signedness, .bits = bit_count } });
+}
+
+test T_int {
+    try expectEqual(u1, T_int(.unsigned, 1));
+    try expectEqual(u8, T_int(.unsigned, 8));
+    try expectEqual(i8, T_int(.signed, 8));
+    try expectEqual(i16, T_int(.signed, 16));
+}
+
+pub fn T_float(comptime bit_count: u8) type {
+    return @Type(.{ .Float = .{ .bits = bit_count } });
+}
+
+test T_float {
+    try expectEqual(f16, T_float(16));
+    try expectEqual(f32, T_float(32));
+    try expectEqual(f64, T_float(64));
+    try expectEqual(f128, T_float(128));
+}
 
 /// Verify properties of namespace `ctx` against `decls`.
 /// Useful for handling custom functions provided by the user,
