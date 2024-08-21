@@ -6,11 +6,43 @@ const std = @import("std");
 
 const mod_assert = @import("../assert/root.zig");
 const root_shared = @import("./shared.zig");
+const root_float = @import("./float.zig");
 
 const ValueError = root_shared.ValueError;
 const assertType = mod_assert.misc.assertType;
 const expectEqual = std.testing.expectEqual;
 const expectError = std.testing.expectError;
+const isFinite = root_float.isFinite;
+const isInf = root_float.isInf;
+const isNan = root_float.isNan;
+
+/// Returns the sum of `a` + `b`.
+/// Asserts `T` to be a numeric type.
+/// Compute - *very cheap*, basic operation and comparison.
+/// Issue key specs:
+/// - Throws error when result would overflow `T`.
+pub inline fn checkedAdd(comptime T: type, a: T, b: T) !T {
+    @setRuntimeSafety(false); // * (asm) removes testing of-flag twice (ReleaseSafe)
+    comptime assertType(T, .{ .Int, .Float, .ComptimeInt, .ComptimeFloat });
+    switch (@typeInfo(T)) { // * comptime branch prune
+        .ComptimeInt, .ComptimeFloat => return a + b,
+        .Int => {
+            const result = @addWithOverflow(a, b);
+            return if (result[1] == 0) result[0] else ValueError.Overflow;
+        },
+        .Float => {
+            const result = a + b;
+            return if (isFinite(result)) result else ValueError.Overflow;
+        },
+    }
+}
+
+test checkedAdd {
+    try expectEqual(7, checkedAdd(u8, 3, 4));
+    try expectEqual(ValueError.Overflow, checkedAdd(u8, 128, 128));
+    try expectEqual(7.0, checkedAdd(f16, 3, 4));
+    try expectEqual(ValueError.Overflow, checkedAdd(f16, 32753, 32753));
+}
 
 /// Returns the sum of `int_a` + `int_b`.
 /// Asserts `T` to be an integer type.
@@ -18,7 +50,7 @@ const expectError = std.testing.expectError;
 /// Issue key specs:
 /// - Throws error when result would overflow `T`.
 pub inline fn safeAdd(comptime T: type, int_a: T, int_b: T) !T {
-    @setRuntimeSafety(false); // * removes testing of-flag twice in asm (ReleaseSafe)
+    @setRuntimeSafety(false); // * removes testing of-flag twice in (ReleaseSafe, asm)
     comptime assertType(T, .{ .Int, .ComptimeInt });
     switch (T) { // * comptime branch prune
         comptime_int => return int_a + int_b,

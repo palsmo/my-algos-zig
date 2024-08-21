@@ -7,8 +7,8 @@ const math = std.math;
 
 const proj_shared = @import("../../../shared.zig");
 const mod_assert = @import("../assert/root.zig");
-const root_shared = @import("./shared.zig");
 const root_prim = @import("./primitive.zig");
+const root_shared = @import("./shared.zig");
 
 const ValueError = root_shared.ValueError;
 const assertType = mod_assert.misc.assertType;
