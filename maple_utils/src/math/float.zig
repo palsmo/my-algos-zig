@@ -1,6 +1,6 @@
 //! Author: palsmo
 //! Status: In Progress
-//! About: IEEE 754 Float Numeric Functionality
+//! Brief: IEEE 754 Float Numeric Functionality
 //!
 //! Float Diagram:
 //!
@@ -8,51 +8,47 @@
 //!          |                 |  leading-bit   |      |
 //! ---------|------+----------+----------------+------|--------------------------------------------
 //! f16      | sign | exponent | [implicit 1/0] . frac | 16-bit (1, 5, 10), half precision
-//!          |                                         | range: ±6.55e-5 to ±65504
 //!          |                                         | precision: ~3.31 decimal digits
 //!          |                                         | use: graphics, machine learning
 //! ---------|------+----------+----------------+------|--------------------------------------------
 //! f32      | sign | exponent | [implicit 1/0] . frac | 32-bit (1, 8, 23), single precision
-//!          |                                         | range: ±1.18e-38 to ±3.4e38
 //!          |                                         | precision: ~7.22 decimal digits
 //!          |                                         | use: graphics, audio, general purpose
 //! ---------|------+----------+----------------+------|--------------------------------------------
 //! f64      | sign | exponent | [implicit 1/0] . frac | 64-bit (1, 11, 52), double precision
-//!          |                                         | range: ±2.23e-308 to ±1.80e308
 //!          |                                         | precision: ~15.95 decimal digits
 //!          |                                         | use: scientific, financial computations
 //! ---------|------+----------+----------------+------|--------------------------------------------
 //! f80      | sign | exponent | [explicit 1/0] . frac | 80-bit (1, 15, 1+63), extended precision
-//!          |                                         | range: ±3.37e-4932 to ±1.18e4932
 //!          |                                         | precision: ~19.27 decimal digits
 //!          |                                         | use: legacy, intermediate calc, x87 FPU
 //! ---------|------+----------+----------------+------|--------------------------------------------
 //! f128     | sign | exponent | [implicit 1/0] . frac | 128-bit (1, 15, 112), quadruple precision
-//!          |                                         | range: ±3.36e-4932 to ±1.19e4932
 //!          |                                         | precision: ~34.02 decimal digits
 //!          |                                         | use: high-precision scientific simulations
 //! ------------------------------------------------------------------------------------------------
 
 const std = @import("std");
 
-const proj_shared = @import("./../../../shared.zig");
+const prj = @import("project");
 const mod_assert = @import("../assert/root.zig");
-const mod_typ = @import("../typ/root.zig");
+const mod_type = @import("../type/root.zig");
 
-const ExecMode = proj_shared.ExecMode;
-const T_float = mod_typ.misc.T_float;
-const T_int = mod_typ.misc.T_int;
-const assertType = mod_assert.misc.assertType;
-const comptimePrint = std.fmt.comptimePrint;
+const ExecMode = prj.modes.ExecMode;
+const TFloat = mod_type.misc.TFloat;
+const TInt = mod_type.misc.TInt;
+const ValueError = prj.errors.ValueError;
+const assertType = mod_assert.assertType;
 const expectEqual = std.testing.expectEqual;
+const expectError = std.testing.expectError;
 const panic = std.debug.panic;
 
-/// Returns the number of exponent bits for `T_flt`.
+/// Returns the number of bits in the *exponent* for `T_flt`.
 /// Asserts `T_flt` to be a *float* type.
 /// Compute - *very cheap*, pre-defined constant.
 pub inline fn exponentBitsN(comptime T_flt: type) comptime_int {
-    comptime assertType(T_flt, .{.Float});
-    return switch (T_flt) { // * comptime branch prune
+    assertType(T_flt, .{.float});
+    return switch (T_flt) { // * comptime prune
         f16 => 5,
         f32 => 8,
         f64 => 11,
@@ -62,12 +58,12 @@ pub inline fn exponentBitsN(comptime T_flt: type) comptime_int {
     };
 }
 
-/// Returns the number of bits in the mantissa for `T_flt`.
+/// Returns the number of bits in the *mantissa* for `T_flt`.
 /// Asserts `T_flt` to be a *float* type.
 /// Compute - *very cheap*, pre-defined constant.
 pub inline fn mantissaBitsN(comptime T_flt: type) comptime_int {
-    comptime assertType(T_flt, .{.Float});
-    return switch (T_flt) { // * comptime branch prune
+    comptime assertType(T_flt, .{.float});
+    return switch (T_flt) { // * comptime prune
         f16 => 10,
         f32 => 23,
         f64 => 52,
@@ -77,14 +73,14 @@ pub inline fn mantissaBitsN(comptime T_flt: type) comptime_int {
     };
 }
 
-/// Returns the number of fractional bits in the mantissa for `T_flt`.
+/// Returns the number of *fractional bits* in the *mantissa* for `T_flt`.
 /// Asserts `T_flt` to be a *float* type.
 /// Compute - *very cheap*, pre-defined constant.
 pub inline fn fractionBitsN(comptime T_flt: type) comptime_int {
-    comptime assertType(T_flt, .{.Float});
+    comptime assertType(T_flt, .{.float});
     // standard IEEE floats have an implicit leading bit (either 0 or 1) in the mantissa
     // f80 is special and has an explicitly stored bit in the most significant mantissa bit.
-    return switch (T_flt) { // * comptime branch prune
+    return switch (T_flt) { // * comptime prune
         f16 => 10,
         f32 => 23,
         f64 => 52,
@@ -94,171 +90,229 @@ pub inline fn fractionBitsN(comptime T_flt: type) comptime_int {
     };
 }
 
-/// Returns the biggest normal value for `T_flt`.
-/// Asserts `T_flt` to be a *float* type.
-/// Compute - *very cheap*, comptime-defined constant.
-pub inline fn max(comptime T_flt: type) comptime_int {
-    assertType(T_flt, .{.Float});
-    return comptime construct(T_flt, 0, exponentMax(T_flt, .Normal), 0, fractionMax(T_flt));
-}
-
-/// Returns the smallest normal/subnormal value for `T_flt`.
-/// Asserts `T_flt` to be a *float* type.
-/// Compute - *very cheap*, comptime-defined constant.
-pub inline fn min(comptime T_flt: type, comptime mode: enum { Normal, Subnormal }) comptime_int {
-    assertType(T_flt, .{.Float});
-    return switch (mode) { // * comptime branch prune
-        .Normal => comptime construct(T_flt, 1, exponentMax(T_flt, .Normal), 0, 0),
-        .Subnormal => comptime construct(T_flt, 0, exponentMin(T_flt, .Special), 0, 1),
-    };
-}
-
-/// Returns the maximum exponent for `T_flt`.
+/// Returns the maximum biased *exponent* for `T_flt`.
 /// Asserts `T_flt` to be a *float* type.
 /// Compute - *very cheap*, few basic operations.
-pub inline fn exponentMax(comptime T_flt: type, comptime mode: enum { Normal, Special }) comptime_int {
-    assertType(T_flt, .{.Float});
-    return switch (mode) { // * comptime branch prune
-        .Special => (1 << exponentBitsN(T_flt)) - 1,
-        .Normal => (1 << (exponentBitsN(T_flt) - 1)) - 1,
+pub inline fn exponentBiasedMax(comptime T_flt: type, comptime mode: enum { normal, special }) comptime_int {
+    comptime assertType(T_flt, .{.float});
+    return switch (mode) { // * comptime prune
+        .normal => (1 << exponentBitsN(T_flt)) - 2,
+        .special => (1 << exponentBitsN(T_flt)) - 1,
     };
 }
 
-test exponentMax {
-    try expectEqual(15, exponentMax(f16, .Normal));
-    try expectEqual(127, exponentMax(f32, .Normal));
-    try expectEqual(1023, exponentMax(f64, .Normal));
-    try expectEqual(16383, exponentMax(f80, .Normal));
-    try expectEqual(16383, exponentMax(f128, .Normal));
+test exponentBiasedMax {
+    try expectEqual(0x1E, exponentBiasedMax(f16, .normal));
+    try expectEqual(0x1F, exponentBiasedMax(f16, .special));
+    try expectEqual(0xFE, exponentBiasedMax(f32, .normal));
+    try expectEqual(0xFF, exponentBiasedMax(f32, .special));
+    try expectEqual(0x7FE, exponentBiasedMax(f64, .normal));
+    try expectEqual(0x7FF, exponentBiasedMax(f64, .special));
+    try expectEqual(0x7FFE, exponentBiasedMax(f80, .normal));
+    try expectEqual(0x7FFF, exponentBiasedMax(f80, .special));
+    try expectEqual(0x7FFE, exponentBiasedMax(f128, .normal));
+    try expectEqual(0x7FFF, exponentBiasedMax(f128, .special));
 }
 
-/// Returns the minimum exponent for `T_flt`.
+/// Returns the minimum biased *exponent* for `T_flt`.
 /// Asserts `T_flt` to be a *float* type.
 /// Compute - *very cheap*, few basic operations.
-pub inline fn exponentMin(comptime T_flt: type, comptime mode: enum { Normal, Special }) comptime_int {
-    assertType(T_flt, .{.Float});
-    return switch (mode) { // * comptime branch prune
-        .Special => 0,
-        .Normal => 1,
+pub inline fn exponentBiasedMin(comptime T_flt: type, comptime mode: enum { normal, special }) comptime_int {
+    comptime assertType(T_flt, .{.float});
+    return switch (mode) { // * comptime prune
+        .normal => 1,
+        .special => 0,
     };
 }
 
-test exponentMin {
-    try expectEqual(-14, exponentMin(f16));
-    try expectEqual(-126, exponentMin(f32));
-    try expectEqual(-1022, exponentMin(f64));
-    try expectEqual(-16382, exponentMin(f80));
-    try expectEqual(-16382, exponentMin(f128));
+/// Returns the maximum unbiased *exponent* for `T_flt`.
+/// Asserts `T_flt` to be a *float* type.
+/// Compute - *very cheap*, few basic operations.
+pub inline fn exponentUnbiasedMax(comptime T_flt: type) comptime_int {
+    comptime assertType(T_flt, .{.float});
+    return (1 << exponentBitsN(T_flt) - 1) - 1;
 }
 
-/// Returns the maximum fractional for `T_flt`.
+test exponentUnbiasedMax {
+    try expectEqual(0x0F, exponentUnbiasedMax(f16));
+    try expectEqual(0x7F, exponentUnbiasedMax(f32));
+    try expectEqual(0x3FF, exponentUnbiasedMax(f64));
+    try expectEqual(0x3FFF, exponentUnbiasedMax(f80));
+    try expectEqual(0x3FFF, exponentUnbiasedMax(f128));
+}
+
+/// Returns the minimum unbiased *exponent* for `T_flt`.
+/// Asserts `T_flt` to be a *float* type.
+/// Compute - *very cheap*, few basic operations.
+pub inline fn exponentUnbiasedMin(comptime T_flt: type) comptime_int {
+    comptime assertType(T_flt, .{.float});
+    return -1 * (exponentUnbiasedMax(T_flt) - 1);
+}
+
+test exponentUnbiasedMin {
+    try expectEqual(-0x0E, exponentUnbiasedMin(f16));
+    try expectEqual(-0x7E, exponentUnbiasedMin(f32));
+    try expectEqual(-0x3FE, exponentUnbiasedMin(f64));
+    try expectEqual(-0x3FFE, exponentUnbiasedMin(f80));
+    try expectEqual(-0x3FFE, exponentUnbiasedMin(f128));
+}
+
+/// Returns the maximum *fractional* for `T_flt`.
 /// Asserts `T_flt` to be a *float* type.
 /// Compute - *very cheap*, few basic operations.
 pub inline fn fractionMax(comptime T_flt: type) comptime_int {
-    assertType(T_flt, .{.Float});
-    return (1 << (fractionBitsN(T_flt) - 1)) - 1;
+    comptime assertType(T_flt, .{.float});
+    return (1 << fractionBitsN(T_flt)) - 1;
 }
 
-/// Returns the minimum fractional for `T_flt`.
+test fractionMax {
+    try expectEqual(0x3FF, fractionMax(f16));
+    try expectEqual(0x7FFFFF, fractionMax(f32));
+    try expectEqual(0xFFFFFFFFFFFFF, fractionMax(f64));
+    try expectEqual(0x7FFFFFFFFFFFFFFF, fractionMax(f80));
+    try expectEqual(0xFFFFFFFFFFFFFFFFFFFFFFFFFFFF, fractionMax(f128));
+}
+
+/// Returns the minimum *fractional* for `T_flt`.
+/// Asserts `T_flt` to be a *float* type.
+/// Compute - *very cheap*, pre-defined constant.
+pub inline fn fractionMin(comptime T_flt: type) comptime_int {
+    comptime assertType(T_flt, .{.float});
+    return 0;
+}
+
+/// Returns the quiet nan *fractional* for `T_flt`.
 /// Asserts `T_flt` to be a *float* type.
 /// Compute - *very cheap*, few basic operations.
-pub inline fn fractionMin(comptime T_flt: type) comptime_int {
-    assertType(T_flt, .{.Float});
-    return -fractionMax(T_flt) + 1;
+pub inline fn fractionNanQuiet(comptime T_flt: type) comptime_int {
+    comptime assertType(T_flt, .{.float});
+    return 1 << fractionBitsN(T_flt) - 1;
 }
 
-/// Returns the maximum mantissa for `T_flt`.
+/// Returns the signaling nan *fractional* for `T_flt`.
+/// Asserts `T_flt` to be a *float* type.
+/// Compute - *very cheap*, few basic operations.
+pub inline fn fractionNanSignaling(comptime T_flt: type) comptime_int {
+    comptime assertType(T_flt, .{.float});
+    return 1 << fractionBitsN(T_flt) - 2;
+}
+
+/// Returns the maximum *mantissa* for `T_flt`.
 /// Asserts `T_flt` to be a *float* type.
 /// Compute - *very cheap*, few basic operations.
 pub inline fn mantissaMax(comptime T_flt: type) comptime_int {
-    comptime assertType(T_flt, .{.Float});
-    return (1 << (mantissaBitsN(T_flt) - 1)) - 1;
+    comptime assertType(T_flt, .{.float});
+    return (1 << mantissaBitsN(T_flt)) - 1;
 }
 
 test mantissaMax {
     try expectEqual(0x3FF, mantissaMax(f16));
     try expectEqual(0x7FFFFF, mantissaMax(f32));
     try expectEqual(0xFFFFFFFFFFFFF, mantissaMax(f64));
-    try expectEqual(0x7FFFFFFFFFFFFFFF, mantissaMax(f80));
+    try expectEqual(0xFFFFFFFFFFFFFFFF, mantissaMax(f80));
     try expectEqual(0xFFFFFFFFFFFFFFFFFFFFFFFFFFFF, mantissaMax(f128));
 }
 
-/// Returns the minimum mantissa for `T_flt`.
+/// Returns the minimum *mantissa* for `T_flt`.
 /// Asserts `T_flt` to be a *float* type.
-/// Compute - *very cheap*, few basic operations.
+/// Compute - *very cheap*, pre-defined constant.
 pub inline fn mantissaMin(comptime T_flt: type) comptime_int {
-    comptime assertType(T_flt, .{.Float});
-    return -mantissaMax(T_flt) + 1;
-}
-
-test mantissaMin {
-    try expectEqual(-0x3FE, mantissaMin(f16));
-    try expectEqual(-0x7FFFFE, mantissaMin(f32));
-    try expectEqual(-0xFFFFFFFFFFFFE, mantissaMin(f64));
-    try expectEqual(-0x7FFFFFFFFFFFFFFE, mantissaMin(f80));
-    try expectEqual(-0xFFFFFFFFFFFFFFFFFFFFFFFFFFFE, mantissaMin(f128));
+    comptime assertType(T_flt, .{.float});
+    return 0;
 }
 
 /// Returns the *fixed bias* for `T_flt`'s exponent.
 /// Used when converting an unbiased exponent to biased.
 /// Compute - *very cheap*, few basic operations.
 /// Asserts `T_flt` to be a *float* type.
-pub const exponentBias = exponentMax;
+pub const exponentBias = exponentUnbiasedMax;
 
 /// Convert an `unbias_exp` to the biased version.
 /// Asserts `T_flt` to be a *float* type.
 /// Compute - *very cheap*, single addition / few comparisons.
+/// ExecMode:
+/// - safe    | can throw error.
+/// - uncheck | undefined when `unbias_exp` is outside bound for `T_flt`.
 /// Issue key specs:
-/// - Panic when resulting exponent would overflow (only *.Safe* `exec_mode`).
-pub inline fn exponentBiasFromUnbias(comptime T_flt: type, unbias_exp: i16, comptime exec_mode: ExecMode) u16 {
-    comptime assertType(T_flt, .{.Float});
-    switch (exec_mode) { // * comptime branch prune
-        .Uncheck => {
-            return @intCast(unbias_exp +% comptime exponentBias(T_flt));
+/// - Throws *OutsideBound* when `unbias_exp` is not within bound for `T_flt`.
+pub inline fn exponentBiasFromUnbias(comptime T_flt: type, unbias_exp: i16, comptime exec_mode: ExecMode) switch (exec_mode) {
+    .uncheck => u16,
+    .safe => ValueError!u16,
+} {
+    comptime assertType(T_flt, .{.float});
+
+    switch (exec_mode) { // * comptime prune
+        .uncheck => {
+            @setRuntimeSafety(false);
+            return @bitCast(unbias_exp + exponentBias(T_flt));
         },
-        .Safe => {
-            const bits_exp_n = exponentBitsN(T_flt);
-            const unbias_exp_max = comptime std.math.maxInt(T_int(.signed, bits_exp_n));
-            const unbias_exp_min = comptime std.math.minInt(T_int(.signed, bits_exp_n));
+        .safe => {
+            const unbias_exp_max = exponentUnbiasedMax(T_flt);
+            const unbias_exp_min = exponentUnbiasedMin(T_flt);
             if (unbias_exp > unbias_exp_max or unbias_exp < unbias_exp_min) {
-                panic(
-                    "Can't convert to biased form, `unbias_exp` value '{d}' has to fit within {d} bits.",
-                    .{ unbias_exp, bits_exp_n },
-                );
+                return error.OutsideBound;
             }
-            return @intCast(unbias_exp +% comptime exponentBias(T_flt));
+            return @bitCast(unbias_exp + exponentBias(T_flt));
         },
+    }
+}
+
+test exponentBiasFromUnbias {
+    inline for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        // ok
+        try expectEqual(exponentBiasedMax(T, .normal), exponentBiasFromUnbias(T, exponentUnbiasedMax(T), .safe));
+        try expectEqual(exponentBiasedMax(T, .normal) / 2, exponentBiasFromUnbias(T, 0, .safe));
+        try expectEqual(exponentBiasedMin(T, .normal), exponentBiasFromUnbias(T, exponentUnbiasedMin(T), .safe));
+        // issue
+        try expectError(error.OutsideBound, exponentBiasFromUnbias(T, exponentUnbiasedMax(T) + 1, .safe));
+        try expectError(error.OutsideBound, exponentBiasFromUnbias(T, exponentUnbiasedMin(T) - 1, .safe));
     }
 }
 
 /// Convert a `bias_exp` to the unbiased version.
 /// Asserts `T_flt` to be a *float* type.
 /// Compute - *very cheap*, single subtraction / few comparisons.
+/// ExecMode:
+/// - safe    | can throw error.
+/// - uncheck | undefined when `bias_exp` is outside bound for `T_flt`.
 /// Issue key specs:
-/// - Panic when resulting exponent would overflow (only *.Safe* `exec_mode`).
-pub inline fn exponentUnbiasFromBias(comptime T_flt: type, bias_exp: u16, comptime exec_mode: ExecMode) i16 {
-    comptime assertType(T_flt, .{.Float});
-    switch (exec_mode) { // * comptime branch prune
-        .Uncheck => {
-            return @intCast(bias_exp -% comptime exponentBias(T_flt));
+/// - Throws *OutsideBound* when `bias_exp` is not within bound for `T_flt`.
+pub inline fn exponentUnbiasFromBias(comptime T_flt: type, bias_exp: u16, comptime exec_mode: ExecMode) switch (exec_mode) {
+    .uncheck => i16,
+    .safe => ValueError!i16,
+} {
+    comptime assertType(T_flt, .{.float});
+
+    switch (exec_mode) { // * comptime prune
+        .uncheck => {
+            @setRuntimeSafety(false);
+            return @as(i16, @bitCast(bias_exp)) - exponentBias(T_flt);
         },
-        .Safe => {
-            const bits_exp_n = exponentBitsN(T_flt);
-            const bias_exp_max = comptime std.math.maxInt(T_int(.unsigned, bits_exp_n));
-            const bias_exp_min = comptime std.math.minInt(T_int(.unsigned, bits_exp_n));
+        .safe => {
+            const bias_exp_max = exponentBiasedMax(T_flt, .normal);
+            const bias_exp_min = exponentBiasedMin(T_flt, .normal);
             if (bias_exp > bias_exp_max or bias_exp < bias_exp_min) {
-                panic(
-                    "Can't convert to unbiased form, `bias_exp` value '{d}' has to fit within {d} bits.",
-                    .{ bias_exp, bits_exp_n },
-                );
+                return error.OutsideBound;
             }
-            return @intCast(bias_exp -% comptime exponentBias(T_flt));
+            return @as(i16, @bitCast(bias_exp)) - exponentBias(T_flt);
         },
     }
 }
 
+test exponentUnbiasFromBias {
+    inline for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        // ok
+        try expectEqual(exponentUnbiasedMax(T), exponentUnbiasFromBias(T, exponentBiasedMax(T, .normal), .safe));
+        try expectEqual(0, exponentUnbiasFromBias(T, exponentBiasedMax(T, .normal) / 2, .safe));
+        try expectEqual(exponentUnbiasedMin(T), exponentUnbiasFromBias(T, exponentBiasedMin(T, .normal), .safe));
+        // issue
+        try expectError(error.OutsideBound, exponentUnbiasFromBias(T, exponentBiasedMax(T, .normal) + 1, .safe));
+        try expectError(error.OutsideBound, exponentUnbiasFromBias(T, exponentBiasedMin(T, .normal) - 1, .safe));
+    }
+}
+
 /// Constructs `T_flt` from its *components*.
-/// Bit-pattern: [ sign-bit | exponent | 'leading-bit' . fraction ]
+/// Bit-pattern: [ sign-bit | exponent | "leading-bit" . fraction ]
 /// Assumes *biased* `expo`, the `lead` only for *f80*.
 /// Assumes `T_flt` to be a *float* type.
 /// Compute - *very cheap*, few bitwise operations.
@@ -267,175 +321,347 @@ pub inline fn construct(
     sign: u1,
     expo: u15,
     lead: u1,
-    frac: T_int(.unsigned, fractionBitsN(T_float(@bitSizeOf(T_flt)))),
+    frac: TInt(.unsigned, fractionBitsN(TFloat(@bitSizeOf(T_flt)))),
 ) T_flt {
-    const sign_shift = @typeInfo(T_flt).Float.bits - 1;
-    const expo_shift = mantissaBitsN(T_flt);
-    switch (T_flt) { // * comptime branch prune
+    const sign_sh: comptime_int = @typeInfo(T_flt).float.bits - 1;
+    const expo_sh: comptime_int = mantissaBitsN(T_flt);
+    switch (T_flt) { // * comptime prune
         f80 => {
-            const lead_shift = fractionBitsN(T_flt);
-            const pattern = (sign << sign_shift) | (expo << expo_shift) | (lead << lead_shift) | frac;
+            const lead_sh = fractionBitsN(T_flt);
+            const pattern: u80 = @as(u80, sign) << sign_sh | @as(u80, expo) << expo_sh | @as(u80, lead) << lead_sh | @as(u80, frac);
             return @bitCast(pattern);
         },
         else => {
-            const pattern = (sign << sign_shift) | (expo << expo_shift) | frac;
+            const T_bits = TInt(.unsigned, @typeInfo(T_flt).float.bits);
+            const pattern: T_bits = @as(T_bits, sign) << sign_sh | @as(T_bits, expo) << expo_sh | @as(T_bits, frac);
             return @bitCast(pattern);
         },
     }
 }
 
-test construct {}
-
-/// Check if `flt` is *normal*, *subnormal* or *zero*.
+/// Returns the biggest value for `T_flt`.
 /// Asserts `T_flt` to be a *float* type.
-/// Compute - *very cheap*, few bitwise operations.
-pub inline fn isFinite(flt: anytype) bool {
-    comptime assertType(@TypeOf(flt), .{.Float});
-    const T_flt = @TypeOf(flt);
-    const T_flt_bit_oper = T_int(.unsigned, @typeInfo(T_flt).Float.bits);
-    const flt_bit_oper: T_flt_bit_oper = @bitCast(flt);
-    const inf_bit_oper: T_flt_bit_oper = comptime @bitCast(inf(T_flt, .Positive));
-    const bitmask_no_sign = ~@as(T_flt_bit_oper, 0) >> 1;
-    return ((flt_bit_oper & bitmask_no_sign) < inf_bit_oper);
+/// Compute - *very cheap*, comptime-defined constant.
+pub inline fn max(comptime T_flt: type) T_flt {
+    comptime assertType(T_flt, .{.float});
+    return construct(T_flt, 0, exponentBiasedMax(T_flt, .normal), 0, fractionMax(T_flt));
 }
 
-test isFinite {
-    inline for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
-        // normals
-        try expectEqual(true, isFinite(@as(T, 4.0)));
-        try expectEqual(true, isFinite(@as(T, -4.0)));
-        // subnormal and zero
-        try expectEqual(true, isFinite(@as(T, std.math.floatTrueMin)));
-        //try expect(isFinite(@as(T, 0.0)));
-        //try expect(isFinite(@as(T, -0.0)));
-        //try expect(isFinite(math.floatTrueMin(T)));
-        //// other float limits
-        //try expect(isFinite(math.floatMin(T)));
-        //try expect(isFinite(math.floatMax(T)));
-        //// inf & nan
-        //try expect(!isFinite(math.inf(T)));
-        //try expect(!isFinite(-math.inf(T)));
-        //try expect(!isFinite(math.nan(T)));
-        //try expect(!isFinite(-math.nan(T)));
-    }
-}
+test max {}
 
-/// Check if `flt` is neither *zero*, *subnormal*, *infinity* or *NaN*.
-/// Assert `T_flt` to be a *float* type.
-/// Compute - *very cheap*, few bitwise operations.
-pub inline fn isNormal(flt: anytype) bool {
-    comptime assertType(@TypeOf(flt), .{.Float});
-    const T_flt = @TypeOf(flt);
-    const T_flt_bit_oper = T_int(.unsigned, @typeInfo(T_flt).Float.bits);
-    const flt_bit_oper: T_flt_bit_oper = @bitCast(flt);
-    const bitmask_no_sign = ~@as(T_flt_bit_oper, 0) >> 1;
-    const exp_incrementer = 1 << mantissaBitsN(T_flt);
-    // Add 1 to the exponent, if it overflows to 0 or becomes 1,
-    // then it was all zeroes (zero/subnormal) or all ones (inf/nan).
-    // The sign bit is removed because all ones would overflow into it.
-    // For f80, even though it has an explicit leading-bit stored,
-    // the exponent takes priority due to its higher significance.
-    return ((bitmask_no_sign & (flt_bit_oper +% exp_incrementer)) >= (exp_incrementer << 1));
-}
-
-pub inline fn isNormalOrZero(flt: anytype) bool {
-    return (flt == 0) or isNormal(flt);
-}
-
-pub inline fn isZero(flt: anytype, comptime mode: enum { Positive, Negative, Both }) bool {
-    comptime assertType(@TypeOf(flt), .{.Float});
-    switch (mode) { // * comptime branch prune
-        .Both => flt == 0,
-        .Positive => {
-            const T_flt = @TypeOf(flt);
-            const T_flt_bit_oper = T_int(.unsigned, @typeInfo(T_flt).Float.bits);
-            const flt_bit_oper: T_flt_bit_oper = @bitCast(flt);
-            const pos_zero_bit_oper: T_flt_bit_oper = 0;
-            return (flt_bit_oper == pos_zero_bit_oper);
-        },
-        .Negative => {
-            const T_flt = @TypeOf(flt);
-            const T_flt_bit_oper = T_int(.unsigned, @typeInfo(T_flt).Float.bits);
-            const flt_bit_oper: T_flt_bit_oper = @bitCast(flt);
-            const neg_zero_bit_oper: T_flt_bit_oper = 1 << (@typeInfo(T_flt).Float.bits - 1);
-            return (flt_bit_oper == neg_zero_bit_oper);
-        },
-    }
-}
-
-/// Returns the inf-value for `T_flt`.
+/// Returns the smallest value for `T_flt`.
 /// Asserts `T_flt` to be a *float* type.
-/// Compute - *very cheap*, pre-defined constant.
-pub inline fn inf(comptime T_flt: type, comptime mode: enum { Positive, Negative }) comptime_int {
-    assertType(T_flt, .{.Float});
-    switch (mode) { // * comptime branch prune
-        .Positive => comptime construct(T_flt, 0, exponentMax(T_flt) + 1, 0, 0),
-        .Negative => comptime construct(T_flt, 1, exponentMin(T_flt) + 1, 0, 0),
-    }
+/// Compute - *very cheap*, comptime-defined constant.
+pub inline fn min(comptime T_flt: type, comptime mode: enum { normal, subnormal }) T_flt {
+    comptime assertType(T_flt, .{.float});
+    return switch (mode) { // * comptime prune
+        .normal => construct(T_flt, 1, exponentBiasedMax(T_flt, .normal), 0, 0),
+        .subnormal => construct(T_flt, 0, exponentBiasedMin(T_flt, .special), 0, 1),
+    };
 }
 
-/// Check if `flt` is some infinity.
-/// Asserts `T_flt` to be a *float* type.
-/// Compute - *very cheap*, single comparison / few bitwise operations.
-pub inline fn isInf(flt: anytype, comptime mode: enum { Positive, Negative, Both }) bool {
-    comptime assertType(@TypeOf(flt), .{.Float});
-    const T_flt = @TypeOf(flt);
-    switch (mode) { // * comptime branch prune
-        .Both => {
-            const T_flt_bit_oper = T_int(.unsigned, @typeInfo(T_flt).Float.bits);
-            const flt_bit_oper: T_flt_bit_oper = @bitCast(flt);
-            const inf_bit_oper: T_flt_bit_oper = comptime inf(T_flt, .Positive);
-            const bitmask_no_sign = ~@as(T_int, 0) >> 1;
-            return ((flt_bit_oper & bitmask_no_sign) == inf_bit_oper);
-        },
-        .Positive, .Negative => {
-            return (flt == comptime inf(T_flt, mode));
-        },
-    }
-}
-
-test isInf {
-    //    const flt_norm: f16 = 444.4;
-    //    const flt_inf: f16 = inf(f16);
-    //    try expectEqual(false, isInf(flt_norm, .Both));
-    //    try expectEqual(true, isInf(flt_inf, .Both));
-}
+test min {}
 
 /// Returns the canonical NaN for `T_flt`.
 /// `mode` *.Quiet* (qNaN), most common, doesn't raise exception when used.
 /// `mode` *.Signaling* (sNaN), raises an exception when used in operations.
 /// Asserts `T_flt` to be a *float* type.
 /// Compute - *very cheap*, pre-defined constant.
-pub inline fn nan(comptime T_flt: type, comptime mode: enum { Quiet, Signaling }) comptime_int {
-    comptime assertType(T_flt, .{.Float});
-    return switch (mode) { // * comptime branch prune
-        .Quiet,
-        => comptime construct(T_flt, 0, exponentMax(T_flt) + 1, 0, (1 << (fractionBitsN(T_flt) - 1)), .Uncheck),
-        .Signaling,
-        => comptime construct(T_flt, 0, exponentMax(T_flt) + 1, 0, (1 << (fractionBitsN(T_flt) - 2)), .Uncheck),
-    };
+pub inline fn nan(comptime T_flt: type, comptime sign: enum { positive, negative }, comptime mode: enum { quiet, signaling }) T_flt {
+    comptime assertType(T_flt, .{.float});
+    // * comptime prune \/
+    const s = if (sign == .negative) 1 else 0;
+    const l = if (T_flt == f80) 1 else 0;
+    const f = if (mode == .quiet) fractionNanQuiet(T_flt) else fractionNanSignaling(T_flt);
+    return construct(T_flt, s, exponentBiasedMax(T_flt, .special), l, f);
+}
+
+test nan {}
+
+/// Returns the inf-value for `T_flt`.
+/// Asserts `T_flt` to be a *float* type.
+/// Compute - *very cheap*, comptime-defined constant.
+pub inline fn inf(comptime T_flt: type, comptime sign: enum { positive, negative }) T_flt {
+    comptime assertType(T_flt, .{.float});
+    // * comptime prune \/
+    const s = if (sign == .negative) 1 else 0;
+    const l = if (T_flt == f80) 1 else 0;
+    return construct(T_flt, s, exponentBiasedMax(T_flt, .special), l, 0);
+}
+
+test inf {}
+
+/// Check if `flt` is *normal*, *subnormal* or *zero*.
+/// Asserts `flt` to be a *float* type.
+/// Compute - *very cheap*, few bitwise operations.
+pub inline fn isFinite(flt: anytype) bool {
+    comptime assertType(@TypeOf(flt), .{.float});
+
+    const T_flt = @TypeOf(flt);
+    const T_bits = TInt(.unsigned, @typeInfo(T_flt).float.bits);
+    const flt_bit_oper: T_bits = @bitCast(flt);
+    const inf_bit_oper: T_bits = @bitCast(inf(T_flt, .positive));
+    const bitmask_no_sign = ~@as(T_bits, 0) >> 1;
+
+    return ((flt_bit_oper & bitmask_no_sign) < inf_bit_oper);
+}
+
+test isFinite {
+    @setEvalBranchQuota(1500);
+    inline for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        // normals
+        try expectEqual(true, isFinite(min(T, .normal)));
+        try expectEqual(true, isFinite(max(T)));
+        // zero & subnormal
+        try expectEqual(true, isFinite(@as(T, 0.0)));
+        try expectEqual(true, isFinite(@as(T, -0.0)));
+        try expectEqual(true, isFinite(min(T, .subnormal)));
+        // inf & nan
+        try expectEqual(false, isFinite(inf(T, .positive)));
+        try expectEqual(false, isFinite(inf(T, .negative)));
+        try expectEqual(false, isFinite(nan(T, .negative, .quiet)));
+        try expectEqual(false, isFinite(nan(T, .negative, .signaling)));
+    }
+}
+
+/// Check if `flt` is neither *zero*, *subnormal*, *infinity* or *NaN*.
+/// Asserts `flt` to be a *float* type.
+/// Compute - *very cheap*, few bitwise operations and comparison.
+pub inline fn isNormal(flt: anytype) bool {
+    comptime assertType(@TypeOf(flt), .{.float});
+
+    const T_flt = @TypeOf(flt);
+    const T_bits = TInt(.unsigned, @typeInfo(T_flt).float.bits);
+    const flt_bit_oper: T_bits = @bitCast(flt);
+    const bitmask_no_sign = ~@as(T_bits, 0) >> 1;
+    const exp_incrementer = 1 << mantissaBitsN(T_flt);
+
+    // Add 1 to the exponent, if it overflows to 0 or becomes 1,
+    // then it was all ones (inf/nan) or all zeroes (zero/subnormal).
+    // The sign bit is removed because all ones would overflow into it.
+    // For f80, even though it has an explicit leading-bit stored,
+    // the exponent takes priority due to its higher significance.
+    return ((bitmask_no_sign & (flt_bit_oper +% exp_incrementer)) >= (exp_incrementer << 1));
+}
+
+test isNormal {
+    inline for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        // normals
+        try expectEqual(true, isNormal(min(T, .normal)));
+        try expectEqual(true, isNormal(max(T)));
+        // zero & subnormal
+        try expectEqual(false, isNormal(@as(T, 0.0)));
+        try expectEqual(false, isNormal(@as(T, -0.0)));
+        try expectEqual(false, isNormal(min(T, .subnormal)));
+        // inf & nan
+        try expectEqual(false, isNormal(inf(T, .positive)));
+        try expectEqual(false, isNormal(inf(T, .negative)));
+        try expectEqual(false, isNormal(nan(T, .positive, .quiet)));
+        try expectEqual(false, isNormal(nan(T, .negative, .quiet)));
+    }
+}
+
+/// Check if `flt` is neither *subnormal*, *infinity* or *NaN*.
+/// Asserts `flt` to be a *float* type.
+/// Compute - *very cheap*, few bitwise operations and comparison.
+pub inline fn isNormalOrZero(flt: anytype) bool {
+    comptime assertType(@TypeOf(flt), .{.float});
+    return (flt == 0) or isNormal(flt);
+}
+
+test isNormalOrZero {
+    inline for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        // normals
+        try expectEqual(true, isNormalOrZero(min(T, .normal)));
+        try expectEqual(true, isNormalOrZero(max(T)));
+        // zero & subnormal
+        try expectEqual(true, isNormalOrZero(@as(T, 0.0)));
+        try expectEqual(true, isNormalOrZero(@as(T, -0.0)));
+        try expectEqual(false, isNormalOrZero(min(T, .subnormal)));
+        // inf & nan
+        try expectEqual(false, isNormalOrZero(inf(T, .positive)));
+        try expectEqual(false, isNormalOrZero(inf(T, .negative)));
+        try expectEqual(false, isNormalOrZero(nan(T, .positive, .quiet)));
+        try expectEqual(false, isNormalOrZero(nan(T, .negative, .quiet)));
+    }
+}
+
+/// Check if `flt` is a specific zero-value.
+/// Asserts `flt` to be a *float* type.
+/// Compute - *very cheap*, single comparison / few bitsise operations.
+pub inline fn isZero(flt: anytype, comptime mode: enum { positive, negative, both }) bool {
+    comptime assertType(@TypeOf(flt), .{.float});
+    switch (mode) { // * comptime prune
+        .both => return (flt == 0),
+        else => {
+            const T_flt = @TypeOf(flt);
+            const T_bits = TInt(.unsigned, @typeInfo(T_flt).float.bits);
+            const flt_bit_oper: T_bits = @bitCast(flt);
+            return switch (mode) { // * comptime prune
+                .positive => (flt_bit_oper == 0),
+                .negative => (flt_bit_oper == (1 << @typeInfo(T_flt).float.bits - 1)),
+                else => unreachable,
+            };
+        },
+    }
+}
+
+test isZero {
+    inline for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        // true
+        try expectEqual(true, isZero(@as(T, 0.0), .both));
+        try expectEqual(true, isZero(@as(T, -0.0), .both));
+        try expectEqual(true, isZero(@as(T, 0.0), .positive));
+        try expectEqual(true, isZero(@as(T, -0.0), .negative));
+        // false
+        try expectEqual(false, isZero(@as(T, 4.0), .both));
+        try expectEqual(false, isZero(@as(T, -0.0), .positive));
+        try expectEqual(false, isZero(@as(T, 4.0), .positive));
+        try expectEqual(false, isZero(@as(T, 0.0), .negative));
+        try expectEqual(false, isZero(@as(T, 4.0), .negative));
+    }
 }
 
 /// Check if `flt` is some NaN.
 /// Asserts `flt` to be a *float* type.
 /// Compute - *very cheap*, single comparison / few bitwise operations.
-pub inline fn isNan(flt: anytype, comptime mode: enum { Quiet, Signaling, Both }) bool {
-    comptime assertType(@TypeOf(flt), .{.Float});
+pub inline fn isNan(flt: anytype, comptime sign: enum { positive, negative, both }, comptime mode: enum { quiet, signaling, both }) bool {
+    comptime assertType(@TypeOf(flt), .{.float});
+
     const T_flt = @TypeOf(flt);
-    const is_nan = (flt != flt);
-    switch (mode) { // * comptime branch prune
-        .Both => return is_nan,
-        .Quiet => {
-            const T_flt_bit_oper = T_int(.unsigned, @typeInfo(T_flt).Float.bits);
-            const flt_bit_oper: T_flt_bit_oper = @bitCast(flt);
-            const bitmask_quiet = 1 << fractionBitsN(T_flt);
-            return (is_nan and ((flt_bit_oper & bitmask_quiet) != 0));
+    const T_bits = TInt(.unsigned, @typeInfo(T_flt).float.bits);
+    const flt_bit_oper: T_bits = @bitCast(flt);
+    const sign_bit_mask = 1 << (@typeInfo(T_flt).float.bits - 1);
+
+    const is_nan = switch (mode) { // * comptime prune
+        .both => (flt != flt),
+        .quiet => (flt != flt) and (flt_bit_oper & fractionNanQuiet(T_flt)) != 0,
+        .signaling => (flt != flt) and (flt_bit_oper & fractionNanQuiet(T_flt)) == 0,
+    };
+
+    return switch (sign) { // * comptime prune
+        .both => is_nan,
+        .positive => is_nan and (flt_bit_oper & sign_bit_mask) == 0,
+        .negative => is_nan and (flt_bit_oper & sign_bit_mask) != 0,
+    };
+}
+
+test isNan {
+    @setEvalBranchQuota(2000);
+    inline for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        // true
+        try expectEqual(true, isNan(nan(T, .positive, .quiet), .positive, .both));
+        try expectEqual(true, isNan(nan(T, .positive, .signaling), .positive, .both));
+        try expectEqual(true, isNan(nan(T, .positive, .quiet), .positive, .quiet));
+        try expectEqual(true, isNan(nan(T, .positive, .signaling), .positive, .signaling));
+        //
+        try expectEqual(true, isNan(nan(T, .negative, .quiet), .both, .quiet));
+        try expectEqual(true, isNan(nan(T, .negative, .quiet), .negative, .quiet));
+        // false
+        try expectEqual(false, isNan(@as(T, 4.0), .both, .both));
+        try expectEqual(false, isNan(nan(T, .positive, .signaling), .both, .quiet));
+        try expectEqual(false, isNan(@as(T, 4.0), .both, .quiet));
+        try expectEqual(false, isNan(nan(T, .positive, .quiet), .both, .signaling));
+        try expectEqual(false, isNan(@as(T, 4.0), .both, .signaling));
+    }
+}
+
+/// Check if `flt` is some infinity.
+/// Asserts `flt` to be a *float* type.
+/// Compute - *very cheap*, single comparison / few bitwise operations.
+pub inline fn isInf(flt: anytype, comptime sign: enum { positive, negative, both }) bool {
+    comptime assertType(@TypeOf(flt), .{.float});
+    const T_flt = @TypeOf(flt);
+    switch (sign) { // * comptime prune
+        .both => {
+            const T_bits = TInt(.unsigned, @typeInfo(T_flt).float.bits);
+            const flt_bit_oper: T_bits = @bitCast(flt);
+            const inf_bit_oper: T_bits = @bitCast(inf(T_flt, .positive));
+            const bitmask_no_sign = ~@as(T_bits, 0) >> 1;
+            return (flt_bit_oper & bitmask_no_sign) == inf_bit_oper;
         },
-        .Signaling => {
-            const T_flt_bit_oper = T_int(.unsigned, @typeInfo(T_flt).Float.bits);
-            const flt_bit_oper: T_flt_bit_oper = @bitCast(flt);
-            const bitmask_signal = 1 << fractionBitsN(T_flt);
-            return (is_nan and ((flt_bit_oper & bitmask_signal) == 0));
+        .positive, .negative => {
+            return flt == comptime inf(T_flt, @enumFromInt(@intFromEnum(sign)));
         },
     }
+}
+
+test isInf {
+    @setEvalBranchQuota(2000);
+    inline for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        // true
+        try expectEqual(true, isInf(inf(T, .positive), .both));
+        try expectEqual(true, isInf(inf(T, .negative), .both));
+        try expectEqual(true, isInf(inf(T, .positive), .positive));
+        try expectEqual(true, isInf(inf(T, .negative), .negative));
+        // false
+        try expectEqual(false, isInf(@as(T, 4.0), .both));
+        try expectEqual(false, isInf(inf(T, .negative), .positive));
+        try expectEqual(false, isInf(@as(T, 4.0), .positive));
+        try expectEqual(false, isInf(inf(T, .positive), .negative));
+        try expectEqual(false, isInf(@as(T, 4.0), .negative));
+    }
+}
+
+/// Returns the sum of `a` + `b`.
+/// Asserts `T_flt` to be a *float* type.
+/// Compute - *very cheap*, basic operation and comparison
+/// Issue key specs:
+/// - Throws *Overflow* when result would be *non-finite*.
+pub inline fn checkedAdd(comptime T_flt: type, a: T_flt, b: T_flt) ValueError!T_flt {
+    comptime assertType(T_flt, .{ .float, .comptime_float });
+    switch (T_flt) { // * comptime prune
+        comptime_float => return a + b,
+        else => {
+            const result = a + b;
+            return if (isFinite(result)) result else error.Overflow;
+        },
+    }
+}
+
+test checkedAdd {
+    try expectEqual(7.0, checkedAdd(f16, 4.0, 3.0));
+    try expectEqual(error.Overflow, checkedAdd(f16, 32768, 32768));
+}
+
+/// Returns the product of `a` * `b`.
+/// Asserts `T_flt` to be an *float* type.
+/// Compute - *very cheap*, basic operation and comparison.
+/// Issue key specs:
+/// - Throws *Overflow* when result would be *non-finite*.
+pub inline fn checkedMul(comptime T_flt: type, a: T_flt, b: T_flt) ValueError!T_flt {
+    comptime assertType(T_flt, .{ .float, .comptime_float });
+    switch (T_flt) { // * comptime prune
+        comptime_float => return a * b,
+        else => {
+            const result = a * b;
+            return if (isFinite(result)) result else error.Overflow;
+        },
+    }
+}
+
+test checkedMul {
+    try expectEqual(12.0, checkedMul(f16, 4.0, 3.0));
+    try expectError(error.Overflow, checkedMul(f16, 256, 256));
+}
+
+/// Returns the difference of `a` - `b`.
+/// Asserts `T_flt` to be an *float* type.
+/// Compute - *very cheap*, basic operation and comparison.
+/// Issue key specs:
+/// - Throws *Underflow* when result would be *non-finite*.
+pub inline fn checkedSub(comptime T_flt: type, a: T_flt, b: T_flt) ValueError!T_flt {
+    comptime assertType(T_flt, .{ .float, .comptime_float });
+    switch (T_flt) { // * comptime prune
+        comptime_float => return a - b,
+        else => {
+            const result = a - b;
+            return if (isFinite(result)) result else error.Underflow;
+        },
+    }
+}
+
+test checkedSub {
+    try expectEqual(1.0, checkedSub(f16, 4.0, 3.0));
+    try expectError(error.Underflow, checkedSub(f16, -32768, 32768));
 }

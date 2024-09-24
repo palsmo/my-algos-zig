@@ -7,32 +7,51 @@ const builtin = std.builtin;
 
 const mod_assert = @import("../assert/root.zig");
 
-const assertComptime = mod_assert.misc.assertComptime;
-const assertFn = mod_assert.misc.assertFn;
-const assertType = mod_assert.misc.assertType;
+const assertComptime = mod_assert.assertComptime;
+const assertFn = mod_assert.assertFn;
+const assertType = mod_assert.assertType;
+const comptimePrint = std.fmt.comptimePrint;
 const expectEqual = std.testing.expectEqual;
 const panic = std.debug.panic;
 
-pub fn T_int(comptime signedness: builtin.Signedness, comptime bit_count: u16) type {
-    return @Type(.{ .Int = .{ .signedness = signedness, .bits = bit_count } });
+/// Constructs a specific *integer* type.
+pub fn TInt(comptime signedness: builtin.Signedness, comptime bit_count: u16) type {
+    return @Type(.{ .int = .{ .signedness = signedness, .bits = bit_count } });
 }
 
-test T_int {
-    try expectEqual(u1, T_int(.unsigned, 1));
-    try expectEqual(u8, T_int(.unsigned, 8));
-    try expectEqual(i8, T_int(.signed, 8));
-    try expectEqual(i16, T_int(.signed, 16));
+test TInt {
+    try expectEqual(u1, TInt(.unsigned, 1));
+    try expectEqual(u8, TInt(.unsigned, 8));
+    try expectEqual(i8, TInt(.signed, 8));
+    try expectEqual(i16, TInt(.signed, 16));
 }
 
-pub fn T_float(comptime bit_count: u8) type {
-    return @Type(.{ .Float = .{ .bits = bit_count } });
+/// Constructs a specific *float* type.
+pub fn TFloat(comptime bit_count: u8) type {
+    return @Type(.{ .float = .{ .bits = bit_count } });
 }
 
-test T_float {
-    try expectEqual(f16, T_float(16));
-    try expectEqual(f32, T_float(32));
-    try expectEqual(f64, T_float(64));
-    try expectEqual(f128, T_float(128));
+test TFloat {
+    try expectEqual(f16, TFloat(16));
+    try expectEqual(f32, TFloat(32));
+    try expectEqual(f64, TFloat(64));
+    try expectEqual(f128, TFloat(128));
+}
+
+/// Returns the child of `P`.
+/// Issue key specs:
+/// - Panics when `P` has no child.
+pub fn Child(comptime P: type) type {
+    return switch (@typeInfo(P)) {
+        .array => |info| info.child,
+        .optional => |info| info.child,
+        .pointer => |info| info.child,
+        .vector => |info| info.child,
+        else => @compileError(comptimePrint(
+            "Expected array, optional, pointer or vector type, found '{s}'",
+            .{@typeName(P)},
+        )),
+    };
 }
 
 /// Verify properties of namespace `ctx` against `decls`.
@@ -41,19 +60,21 @@ test T_float {
 /// Example `decls`:
 /// .{
 ///     .{ "fn"  , T_ret, .{ T_arg1, T_arg2 } }, // function
-///     .{ "decl", T    , .{} },                 // simple declaration
-///     .{ ... },
+///     .{ "decl", T    , .{} },                 // declaration
+///     ...
 /// }
+/// Issue key specs:
+/// - Panics when context fail verification.
 pub fn verifyContext(comptime ctx: type, comptime decls: anytype) void {
     assertComptime(@src().fn_name);
-    assertType(ctx, .{.Struct}, "fn {s}.ctx", .{@src().fn_name});
-    assertType(@TypeOf(decls), .{.Struct}, "fn {s}.decls", .{@src().fn_name});
+    assertType(ctx, .{.@"struct"});
+    assertType(@TypeOf(decls), .{.@"struct"});
 
     inline for (decls, 0..) |decl, i| {
 
         // check 'decl' -->
 
-        if (@typeInfo(@TypeOf(decl)) != .Struct) {
+        if (@typeInfo(@TypeOf(decl)) != .@"struct") {
             @compileError(std.fmt.comptimePrint(
                 "Invalid declaration (index {d} `decls`), expected tuple found '{s}'",
                 .{ i, @typeName(@TypeOf(decl)) },
@@ -82,7 +103,7 @@ pub fn verifyContext(comptime ctx: type, comptime decls: anytype) void {
                 .{ i, @typeName(decl_1_type) },
             ));
         }
-        if (@typeInfo(decl_2_type) != .Struct) {
+        if (@typeInfo(decl_2_type) != .@"struct") {
             @compileError(std.fmt.comptimePrint(
                 "Invalid function arguments (index {d} `decls`), expected tuple found '{s}'",
                 .{ i, @typeName(decl_2_type) },
@@ -105,7 +126,7 @@ pub fn verifyContext(comptime ctx: type, comptime decls: anytype) void {
         const T_actual = @TypeOf(@field(ctx, name));
 
         switch (@typeInfo(T_actual)) {
-            .Fn => assertFn(T_actual, fn_args, T_final),
+            .@"fn" => assertFn(T_actual, fn_args, T_final),
             else => {
                 if (fn_args.len > 0) {
                     @compileError(std.fmt.comptimePrint(
@@ -153,8 +174,8 @@ test verifyContext {
 /// - c pointer to byte (for safe handling use 'std.mem.span' to implicitly check for null terminator).
 pub fn isString(comptime T: type) bool {
     return switch (@typeInfo(T)) {
-        .Array => |arr| arr.child == u8,
-        .Pointer => |ptr| switch (ptr.size) {
+        .array => |arr| arr.child == u8,
+        .pointer => |ptr| switch (ptr.size) {
             .Slice => ptr.child == u8,
             .Many => b: {
                 const sentinel_ptr = ptr.sentinel orelse break :b false;
@@ -163,7 +184,7 @@ pub fn isString(comptime T: type) bool {
                 break :b (x and y);
             },
             .One => switch (@typeInfo(ptr.child)) {
-                .Array => |arr| arr.child == u8,
+                .array => |arr| arr.child == u8,
                 else => false,
             },
             .C => ptr.child == u8,
@@ -187,21 +208,23 @@ test isString {
 
 /// Assert that type `T` is pointer to an array.
 /// If successful returns the child type on the array.
+/// Issue key specs:
+/// - Panics when `T` fail assertion.
 pub fn PointerArrayChildType(comptime T: type) type {
     const info = @typeInfo(T);
-    if (info != .Pointer) {
+    if (info != .pointer) {
         @compileError("Expected pointer, found " ++ @typeName(T));
     }
-    switch (info.Pointer.size) {
+    switch (info.pointer.size) {
         .Slice, .Many => {
-            return info.Pointer.child;
+            return info.pointer.child;
         },
         else => {
-            const info_child = @typeInfo(info.Pointer.child);
-            if (info_child != .Array) {
-                @compileError("Expected array child, found " ++ @typeName(info.Pointer.child));
+            const info_child = @typeInfo(info.pointer.child);
+            if (info_child != .array) {
+                @compileError("Expected array child, found " ++ @typeName(info.pointer.child));
             }
-            return info_child.Array.child;
+            return info_child.array.child;
         },
     }
 }

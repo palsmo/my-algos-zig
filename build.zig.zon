@@ -1,5 +1,5 @@
 .{
-    .name = "my-algos-in-zig",
+    .name = "forestlib",
     .version = "0.0.0",
     .dependencies = .{},
     .paths = .{"."},

@@ -41,7 +41,7 @@ NIX_ENFORCE_NO_NATIVE='1'
 export NIX_ENFORCE_NO_NATIVE
 NIX_HARDENING_ENABLE='bindnow format fortify fortify3 pic relro stackprotector strictoverflow zerocallusedregs'
 export NIX_HARDENING_ENABLE
-NIX_LDFLAGS='-rpath /home/jogr/projects/treelib/outputs/out/lib  -L/nix/store/rigaqxb64imqxvdkjwcq4rbxpxaz3yg4-zig-0.14.0-dev.1359+e9a00ba7f/lib -L/nix/store/rigaqxb64imqxvdkjwcq4rbxpxaz3yg4-zig-0.14.0-dev.1359+e9a00ba7f/lib'
+NIX_LDFLAGS='-rpath /home/jogr/projects/forestlib/outputs/out/lib  -L/nix/store/rigaqxb64imqxvdkjwcq4rbxpxaz3yg4-zig-0.14.0-dev.1359+e9a00ba7f/lib -L/nix/store/rigaqxb64imqxvdkjwcq4rbxpxaz3yg4-zig-0.14.0-dev.1359+e9a00ba7f/lib'
 export NIX_LDFLAGS
 NIX_NO_SELF_RPATH='1'
 NIX_STORE='/nix/store'
@@ -133,7 +133,7 @@ name='nix-shell-env'
 export name
 nativeBuildInputs=''
 export nativeBuildInputs
-out='/home/jogr/projects/treelib/outputs/out'
+out='/home/jogr/projects/forestlib/outputs/out'
 export out
 outputBin='out'
 outputDev='out'
@@ -164,7 +164,7 @@ preConfigurePhases=' updateAutotoolsGnuConfigScriptsPhase'
 declare -a preFixupHooks=('_moveToShare' '_multioutDocs' '_multioutDevs' )
 preferLocalBuild='1'
 export preferLocalBuild
-prefix='/home/jogr/projects/treelib/outputs/out'
+prefix='/home/jogr/projects/forestlib/outputs/out'
 declare -a propagatedBuildDepFiles=('propagated-build-build-deps' 'propagated-native-build-inputs' 'propagated-build-target-deps' )
 propagatedBuildInputs=''
 export propagatedBuildInputs

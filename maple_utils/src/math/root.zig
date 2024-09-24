@@ -15,37 +15,50 @@
 //! ------------------------------------------------------------------------------
 
 const root_float = @import("./float.zig");
+const root_int = @import("./int.zig");
 const root_linear = @import("./linear.zig");
 const root_misc = @import("./misc.zig");
-const root_prim = @import("./primitive.zig");
-const root_shared = @import("./shared.zig");
 
 // exports -->
 
-pub const err = struct {
-    pub const ValueError = root_shared.ValueError;
-};
-
 pub const float = struct {
     pub const construct = root_float.construct;
+    pub const exponentBitsN = root_float.exponentBitsN;
+    pub const exponentBiasedMax = root_float.exponentBiasedMax;
+    pub const exponentBiasedMin = root_float.exponentBiasedMin;
+    pub const exponentUnbiasedMax = root_float.exponentUnbiasedMax;
+    pub const exponentUnbiasedMin = root_float.exponentUnbiasedMin;
     pub const exponentBias = root_float.exponentBias;
     pub const exponentBiasFromUnbias = root_float.exponentBiasFromUnbias;
-    pub const exponentBitsN = root_float.exponentBitsN;
-    pub const exponentMax = root_float.exponentMax;
-    pub const exponentMin = root_float.exponentMin;
     pub const exponentUnbiasFromBias = root_float.exponentUnbiasFromBias;
-    pub const fractionalBitsN = root_float.fractionalBitsN;
-    pub const inf = root_float.inf;
-    pub const isFinite = root_float.isFinite;
-    pub const isInf = root_float.isInf;
-    pub const isNan = root_float.isNan;
-    pub const isNormal = root_float.isNormal;
-    pub const isNormalOrZero = root_float.isNormalOrZero;
-    pub const isZero = root_float.isZero;
+    pub const fractionBitsN = root_float.fractionBitsN;
+    pub const fractionMax = root_float.fractionMax;
+    pub const fractionMin = root_float.fractionMin;
+    pub const fractionNanQuiet = root_float.fractionNanQuiet;
+    pub const fractionNanSignaling = root_float.fractionNanSignaling;
     pub const mantissaBitsN = root_float.mantissaBitsN;
     pub const mantissaMax = root_float.mantissaMax;
     pub const mantissaMin = root_float.mantissaMin;
+    pub const max = root_float.max;
+    pub const min = root_float.min;
     pub const nan = root_float.nan;
+    pub const inf = root_float.inf;
+    pub const isFinite = root_float.isFinite;
+    pub const isNormal = root_float.isNormal;
+    pub const isNormalOrZero = root_float.isNormalOrZero;
+    pub const isZero = root_float.isZero;
+    pub const isNan = root_float.isNan;
+    pub const isInf = root_float.isInf;
+    pub const checkedAdd = root_float.checkedAdd;
+    pub const checkedMul = root_float.checkedMul;
+    pub const checkedSub = root_float.checkedSub;
+};
+
+pub const int = struct {
+    pub const checkedAdd = root_int.checkedAdd;
+    pub const checkedMul = root_int.checkedMul;
+    pub const checkedSub = root_int.checkedSub;
+    pub const fastMod = root_int.fastMod;
 };
 
 pub const linear = struct {
@@ -56,28 +69,21 @@ pub const linear = struct {
 };
 
 pub const misc = struct {
+    pub const POWER_OF_10_TABLE_FLOAT = root_misc.POWER_OF_10_TABLE_FLOAT;
+    pub const POWER_OF_10_TALBE_INT = root_misc.POWER_OF_10_TALBE_INT;
+    pub const indexPower10 = root_misc.indexPower10;
     pub const isPowerOf2 = root_misc.isPowerOf2;
+    pub const minBits = root_misc.minBits;
     pub const mulPercent = root_misc.mulPercent;
     pub const wrapDecrement = root_misc.wrapDecrement;
     pub const wrapIncrement = root_misc.wrapIncrement;
 };
 
-pub const prim = struct {
-    pub const fastMod = root_prim.fastMod;
-    pub const indexPower10 = root_prim.indexPower10;
-    pub const power_of_10_table_float = root_prim.power_of_10_table_float;
-    pub const power_of_10_table_int = root_prim.power_of_10_table_int;
-    pub const safeAdd = root_prim.safeAdd;
-    pub const safeMul = root_prim.safeMul;
-    pub const safeSub = root_prim.safeSub;
-};
-
 // testing -->
 
 test {
-    //_ = linear;
     _ = root_float;
+    _ = root_int;
     _ = root_misc;
-    _ = root_prim;
-    _ = root_shared;
+    //_ = root_linear;
 }

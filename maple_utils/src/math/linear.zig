@@ -1,69 +1,74 @@
 //! Author: palsmo
 //! Status: In Progress
-//! About: Linear Algebra Library
+//! About: Linear Algebra Functionality
 
 const std = @import("std");
-const math = std.math;
 
-const proj_shared = @import("./../../../shared.zig");
+const prj = @import("project");
 const mod_assert = @import("../assert/root.zig");
 const mod_debug = @import("../debug/root.zig");
-const root_prim = @import("./primitive.zig");
-const root_shared = @import("./shared.zig");
+const root_float = @import("./float.zig");
+const root_int = @import("./int.zig");
 
-const ExecMode = proj_shared.ExecMode;
-const ValueError = root_shared.ValueError;
-const assertAndMsg = mod_assert.misc.assertAndMsg;
-const assertComptime = mod_assert.misc.assertComptime;
-const assertType = mod_assert.misc.assertType;
-const assertTypeSame = mod_assert.misc.assertTypeSame;
+const ExecMode = prj.modes.ExecMode;
+const ValueError = prj.errors.ValueError;
+const assertAndMsg = mod_assert.assertAndMsg;
+const assertComptime = mod_assert.assertComptime;
+const assertType = mod_assert.assertType;
+const assertTypeSame = mod_assert.assertTypeSame;
+const checkedAdd = root_int.checkedAdd;
 const comptimePrint = std.fmt.comptimePrint;
 const expectEqual = std.testing.expectEqual;
+const isFinite = root_float.isFinite;
 const panic = std.debug.panic;
-const safeAdd = root_prim.safeAdd;
-const safeMul = root_prim.safeMul;
 
-/// Calculate the dot-product of `vec_a` o `vec_b`.
-/// Asserts `vec_a` and `vec_b` to be numeric vectors of the same type.
-/// Compute - very cheap, few basic operations.
+/// Returns the dot-product of `vec_a` o `vec_b`.
+/// Asserts `vec_a` and `vec_b` to be the same *numeric vector* type.
+/// Compute - *very cheap*, few basic operations.
 /// Issue key specs:
-/// - Throw error when calculation overflows (only *.Safe* `exec_mode`).
+/// - Throws error when calculation overflows (only *.Safe* `exec_mode`).
 pub inline fn dot(vec_a: anytype, vec_b: anytype, comptime exec_mode: ExecMode) switch (exec_mode) {
-    .Uncheck => @TypeOf(vec_a[0]),
-    .Safe => !@TypeOf(vec_a[0]),
+    .uncheck => @TypeOf(vec_a[0]),
+    .safe => !@TypeOf(vec_a[0]),
 } {
-    comptime assertTypeSame(vec_a, vec_b);
-    comptime assertType(@TypeOf(vec_a), .{.Vector});
-    comptime assertType(@typeInfo(@TypeOf(vec_a)).Vector.child, .{ .Int, .Float, .ComptimeInt, .ComptimeFloat });
+    comptime assertTypeSame(@TypeOf(vec_a), @TypeOf(vec_b));
+    comptime assertType(@TypeOf(vec_a).vector.child, .{ .int, .float, .comptime_int, .comptime_float });
+    comptime assertType(@TypeOf(vec_a), .{.vector});
 
     const T_vec = @TypeOf(vec_a);
-    const T_vec_child = @typeInfo(T_vec).Vector.child;
+    const T_vec_info = @typeInfo(T_vec).vector;
+    const T_vec_child = T_vec_info.child;
 
     switch (exec_mode) { // * comptime branch prune
-        .Uncheck => return @reduce(.Add, vec_a *% vec_b),
-        .Safe => {
+        .uncheck => {
+            @setFloatMode(.optimized);
+            return @reduce(.Add, vec_a *% vec_b);
+        },
+        .safe => {
             switch (@typeInfo(T_vec_child)) { // * comptime branch prune
-                .Int => {
+                .int => {
                     const vec_zero: T_vec = @splat(0);
                     if (vec_a == vec_zero or vec_b == vec_zero) return 0;
 
                     const vec_prod = vec_a *% vec_b;
-                    if ((vec_prod / vec_a) != vec_b) return ValueError.Overflow; // * mul wraps, div don't
+                    if ((vec_prod / vec_a) != vec_b) return ValueError.overflow; // * mul wraps, div don't
 
                     var sum: T_vec_child = 0;
-                    inline for (0..@typeInfo(T_vec).Vector.len) |i| {
-                        sum = try safeAdd(T_vec_child, sum, vec_prod[i]);
+                    for (0..T_vec_info.len) |i| {
+                        sum = try checkedAdd(T_vec_child, sum, vec_prod[i]);
                     }
 
                     return sum;
                 },
-                .Float => {
+                .float => {
                     const sum = @reduce(.Add, vec_a * vec_b);
-                    if (std.math.isPositiveInf(sum)) return ValueError.Overflow;
-
+                    if (!isFinite(sum, .positive)) return ValueError.overflow;
                     return sum;
                 },
-                .ComptimeInt, .ComptimeFloat => return @reduce(.Add, vec_a *% vec_b),
+                .comptime_int, .comptime_float => {
+                    const sum = @reduce(.Add, vec_a *% vec_b);
+                    return sum;
+                },
                 else => unreachable,
             }
         },
@@ -71,13 +76,30 @@ pub inline fn dot(vec_a: anytype, vec_b: anytype, comptime exec_mode: ExecMode) 
 }
 
 test dot {
-    const V = @Vector(3, u8);
-    const vec_a: V = .{ 1, 2, 3 };
-    const vec_b: V = .{ 3, 2, 1 };
-    const expect = 10;
-    const result = dot(vec_a, vec_b, .Safe);
-    try expectEqual(expect, result);
+    inline for ([_]type{ u8, i8, f16, comptime_int, comptime_float }) |T| {
+        const V = @Vector(3, T);
+        const vec_a: V = .{ 1, 2, 3 };
+        const vec_b: V = .{ 3, 2, 1 };
+        try expectEqual(10, dot(vec_a, vec_b, .Safe));
+    }
 }
+
+/// Returns the cross-product between `vec_a` x `vec_b`.
+/// Asserts `vec_a` and `vec_b` to be the same *numeric vector* type.
+/// Compute - *cheap*.
+pub inline fn cross(vec_a: anytype, vec_b: anytype) @TypeOf(vec_a) {
+    comptime assertTypeSame(@TypeOf(vec_a), @TypeOf(vec_b));
+    comptime assertType(@TypeOf(vec_a).vector.child, .{ .int, .float, .comptime_int, .comptime_float });
+    comptime assertType(@TypeOf(vec_a), .{.vector});
+
+    return .{
+        vec_a[1] * vec_b[2] - vec_a[2] * vec_b[1],
+        vec_a[2] * vec_b[0] - vec_a[0] * vec_b[2],
+        vec_a[0] * vec_b[1] - vec_a[1] * vec_b[0],
+    };
+}
+
+test cross {}
 
 ///// Calculate the cross product between `vec_a` and `vec_b`.
 ///// Asserts `vec_a` and `vec_b` to be vector types.

@@ -48,12 +48,11 @@ test assertComptime {
 /// `args` should be a tuple of expected parameter types (ordered).
 /// `T_ret` is the expected function return type.
 pub fn assertFn(comptime T_fn: type, comptime args: anytype, comptime T_ret: type) void {
-    assertComptime(@src().fn_name);
 
     // check `T_fn` type
     const T_fn_info = @typeInfo(T_fn);
     switch (T_fn_info) { // * comptime branch prune
-        .Fn => {},
+        .@"fn" => {},
         else => {
             @compileError(comptimePrint(
                 "Expected function type for `T_fn` argument, found '{s}'",
@@ -66,7 +65,7 @@ pub fn assertFn(comptime T_fn: type, comptime args: anytype, comptime T_ret: typ
     const T_args = @TypeOf(args);
     const T_args_info = @typeInfo(T_args);
     switch (T_args_info) { // * comptime branch prune
-        .Struct => {},
+        .@"struct" => {},
         else => {
             @compileError(comptimePrint(
                 "Expected tuple type for `args` argument, found '{s}'",
@@ -76,8 +75,8 @@ pub fn assertFn(comptime T_fn: type, comptime args: anytype, comptime T_ret: typ
     }
 
     // check number of parameters
-    const params = T_fn_info.Fn.params;
-    if (params.len != T_args_info.Struct.fields.len) {
+    const params = T_fn_info.@"fn".params;
+    if (params.len != T_args_info.@"struct".fields.len) {
         @compileError("Expected same parameter count, found " ++
             comptimePrint("{d}", .{params.len}) ++ "!=" ++
             comptimePrint("{d}", .{T_args_info.Struct.fields.len}));
@@ -101,7 +100,7 @@ pub fn assertFn(comptime T_fn: type, comptime args: anytype, comptime T_ret: typ
     }
 
     // check return type
-    const Ret = T_fn_info.Fn.return_type.?;
+    const Ret = T_fn_info.@"fn".return_type.?;
     if (Ret != T_ret) {
         @compileError(comptimePrint(
             "Type mismatch for return, expected '{s}' (`T_ret`) found '{s}' (in `T_fn`).",
@@ -120,7 +119,7 @@ test assertFn {
 
 /// Assert `int` is some power of 2.
 pub inline fn assertPowerOf2(int: anytype) void {
-    comptime assertType(@TypeOf(int), .{ .Int, .ComptimeInt });
+    comptime assertType(@TypeOf(int), .{ .int, .comptime_int });
     if (isPowerOf2(int)) return;
     panic("Value is not a power of two, found '{}'", .{int});
 }
@@ -134,14 +133,13 @@ test assertPowerOf2 {
 }
 
 /// Assert `T` matches any of `types`.
-/// `types` should be a tuple of 'std.builtin.Type(enum)', e.g. .{ .Int, .Float }
+/// `types` should be a tuple of 'std.builtin.Type(enum)', e.g. .{ .int, .float }
 pub fn assertType(comptime T: type, comptime types: anytype) void {
-    assertComptime(@src().fn_name);
 
     // verify `types`
     const T_types = @TypeOf(types);
     switch (@typeInfo(T_types)) {
-        .Struct => {},
+        .@"struct" => {},
         else => @compileError(comptimePrint(
             "Expected tuple (`types`), found '{s}'",
             .{@typeName(T_types)},
@@ -152,21 +150,21 @@ pub fn assertType(comptime T: type, comptime types: anytype) void {
 
     // verify against `types`
     inline for (types, 0..) |typ, i| {
-        // check 't' is enum literal
+        // check 'typ' is enum literal
         if (@TypeOf(typ) != @TypeOf(.enum_literal)) {
             @compileError(comptimePrint(
                 "Invalid declaration (index {d} `types`), expected enum literal found '{s}'",
                 .{ i, @typeName(@TypeOf(typ)) },
             ));
         }
-        // check 't' is field of 'std.builtin.Type'
+        // check 'typ' is field of 'std.builtin.Type'
         if (!@hasField(std.builtin.Type, @tagName(typ))) {
             @compileError(comptimePrint(
                 "Invalid declaration (index {d} `types`), '{s}' is not a member of 'std.builtin.Type'",
                 .{ i, @tagName(typ) },
             ));
         }
-        // check `T` is kind `t`
+        // check `T` is kind `typ`
         if (i > 0) types_str = types_str ++ ", ";
         types_str = types_str ++ "." ++ @tagName(typ);
         if (@typeInfo(T) == typ) return;
@@ -181,7 +179,7 @@ pub fn assertType(comptime T: type, comptime types: anytype) void {
 
 test assertType {
     comptime {
-        const types = .{ .Int, .Bool };
+        const types = .{ .int, .bool };
         assertType(u8, types);
         assertType(bool, types);
         // TODO! test panic case, currently not possible :(
@@ -190,7 +188,6 @@ test assertType {
 
 /// Assert types `T_a` and `T_b` are the same.
 pub fn assertTypeSame(comptime T_a: type, comptime T_b: type) void {
-    assertComptime(@src().fn_name);
     if (T_a == T_b) return;
     const fmt = "Type mismatch for '{s}' (`T_a`) and '{s}' (`T_b`).";
     @compileError(comptimePrint(fmt, .{ @typeName(T_a), @typeName(T_b) }));
