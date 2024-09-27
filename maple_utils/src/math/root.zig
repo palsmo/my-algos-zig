@@ -22,6 +22,7 @@ const root_misc = @import("./misc.zig");
 // exports -->
 
 pub const float = struct {
+    pub const POWER_OF_10_TABLE = root_float.POWER_OF_10_TABLE;
     pub const construct = root_float.construct;
     pub const exponentBitsN = root_float.exponentBitsN;
     pub const exponentBiasedMax = root_float.exponentBiasedMax;
@@ -52,13 +53,22 @@ pub const float = struct {
     pub const checkedAdd = root_float.checkedAdd;
     pub const checkedMul = root_float.checkedMul;
     pub const checkedSub = root_float.checkedSub;
+    pub const isPowerOf2 = root_float.isPowerOf2;
+    pub const nextPowerOf2 = root_float.nextPowerOf2;
 };
 
 pub const int = struct {
+    pub const POWER_OF_10_TABLE = root_int.POWER_OF_10_TABLE;
+    pub const max = root_int.max;
+    pub const min = root_int.min;
     pub const checkedAdd = root_int.checkedAdd;
     pub const checkedMul = root_int.checkedMul;
     pub const checkedSub = root_int.checkedSub;
     pub const fastMod = root_int.fastMod;
+    pub const isPowerOf2 = root_int.isPowerOf2;
+    pub const nextPowerOf2 = root_int.nextPowerOf2;
+    pub const nthPower10 = root_int.nthPower10;
+    pub const minRepBits = root_int.minBits;
 };
 
 pub const linear = struct {
@@ -69,11 +79,6 @@ pub const linear = struct {
 };
 
 pub const misc = struct {
-    pub const POWER_OF_10_TABLE_FLOAT = root_misc.POWER_OF_10_TABLE_FLOAT;
-    pub const POWER_OF_10_TALBE_INT = root_misc.POWER_OF_10_TALBE_INT;
-    pub const indexPower10 = root_misc.indexPower10;
-    pub const isPowerOf2 = root_misc.isPowerOf2;
-    pub const minBits = root_misc.minBits;
     pub const mulPercent = root_misc.mulPercent;
     pub const wrapDecrement = root_misc.wrapDecrement;
     pub const wrapIncrement = root_misc.wrapIncrement;

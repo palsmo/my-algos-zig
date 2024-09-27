@@ -78,28 +78,28 @@ pub fn ord(a: anytype, b: anytype) std.math.Order {
     const T = @TypeOf(a);
     if (T != @TypeOf(b)) @compileError("Arguments are not same type, can't evaluate order.");
 
-    switch (@typeInfo(T)) { // * comptime branch prune
-        .Int, .Float, .ComptimeInt, .ComptimeFloat => {
+    switch (@typeInfo(T)) { // * comptime prune
+        .int, .float, .comptime_int, .comptime_float => {
             if (a < b) return .lt;
             if (a > b) return .gt;
             return .eq;
         },
-        .Array => {
+        .array => {
             for (a, b) |item_a, item_b| {
                 const order = ord(item_a, item_b);
                 if (order != .eq) return order;
             }
             return .eq;
         },
-        .Vector => |info| {
+        .vector => |info| {
             for (0..info.len) |i| {
                 if (a[i] < b[i]) return .lt;
                 if (a[i] > b[i]) return .gt;
             }
             return .eq;
         },
-        .Pointer => |info| {
-            switch (info.size) { // * comptime branch prune
+        .pointer => |info| {
+            switch (info.size) { // * comptime prune
                 .Slice => {
                     // element by element
                     const min_len = @min(a.len, b.len);
@@ -130,24 +130,24 @@ pub fn ord(a: anytype, b: anytype) std.math.Order {
                 .One, .C => return ord(a.*, b.*),
             }
         },
-        .Optional => {
+        .optional => {
             // null < non-null
             if (a == null and b == null) return .eq;
             if (a == null) return .lt;
             if (b == null) return .gt;
             return ord(a.?, b.?);
         },
-        .Bool => {
+        .bool => {
             if (a == b) return .eq;
             if (a) return .gt;
             return .lt;
         },
-        .Enum => {
+        .@"enum" => {
             if (@intFromEnum(a) < @intFromEnum(b)) return .lt;
             if (@intFromEnum(a) > @intFromEnum(b)) return .gt;
             return .eq;
         },
-        .Union => |info| {
+        .@"union" => |info| {
             if (info.tag_type != null) {
                 // is tagged union, compare the active tags
                 const a_tag = std.meta.activeTag(a);
@@ -171,7 +171,7 @@ pub fn ord(a: anytype, b: anytype) std.math.Order {
                 @compileError("Can't compare non-tagged union (active field can't be established).");
             }
         },
-        .Struct => |info| {
+        .@"struct" => |info| {
             // compare field by field
             inline for (info.fields) |field| {
                 const order = ord(@field(a, field.name), @field(b, field.name));
@@ -179,8 +179,8 @@ pub fn ord(a: anytype, b: anytype) std.math.Order {
             }
             return .eq;
         },
-        .Null => return .eq,
-        .Void => return .eq,
+        .null => return .eq,
+        .void => return .eq,
         else => @compileError("Unsupported type for comparison."),
     }
 }

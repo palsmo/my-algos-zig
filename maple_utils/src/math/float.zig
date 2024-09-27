@@ -43,6 +43,22 @@ const expectEqual = std.testing.expectEqual;
 const expectError = std.testing.expectError;
 const panic = std.debug.panic;
 
+/// Powers of 10 lookup table.
+/// Size: 16 entries * 8 bytes = 128 bytes.
+/// { 1.0, 10.0, 100.0, 1000.0, ..., 10 ^ 15 }
+pub const POWER_OF_10_TABLE = b: {
+    const len = 16;
+    var buf: [len]f64 = undefined;
+    buf[0] = 1;
+    for (1..len) |i| buf[i] = buf[i - 1] * 10;
+    break :b buf;
+};
+
+test POWER_OF_10_TABLE {
+    try expectEqual(1.0, POWER_OF_10_TABLE[0]);
+    try expectEqual(1_000_000_000_000_000.0, POWER_OF_10_TABLE[15]);
+}
+
 /// Returns the number of bits in the *exponent* for `T_flt`.
 /// Asserts `T_flt` to be a *float* type.
 /// Compute - *very cheap*, pre-defined constant.
@@ -347,7 +363,7 @@ pub inline fn max(comptime T_flt: type) T_flt {
     return construct(T_flt, 0, exponentBiasedMax(T_flt, .normal), 0, fractionMax(T_flt));
 }
 
-test max {}
+test max {} // TODO: write tests
 
 /// Returns the smallest value for `T_flt`.
 /// Asserts `T_flt` to be a *float* type.
@@ -360,7 +376,7 @@ pub inline fn min(comptime T_flt: type, comptime mode: enum { normal, subnormal 
     };
 }
 
-test min {}
+test min {} // TODO: write tests
 
 /// Returns the canonical NaN for `T_flt`.
 /// `mode` *.Quiet* (qNaN), most common, doesn't raise exception when used.
@@ -376,7 +392,7 @@ pub inline fn nan(comptime T_flt: type, comptime sign: enum { positive, negative
     return construct(T_flt, s, exponentBiasedMax(T_flt, .special), l, f);
 }
 
-test nan {}
+test nan {} // TODO: write tests
 
 /// Returns the inf-value for `T_flt`.
 /// Asserts `T_flt` to be a *float* type.
@@ -389,7 +405,7 @@ pub inline fn inf(comptime T_flt: type, comptime sign: enum { positive, negative
     return construct(T_flt, s, exponentBiasedMax(T_flt, .special), l, 0);
 }
 
-test inf {}
+test inf {} // TODO: write tests
 
 /// Check if `flt` is *normal*, *subnormal* or *zero*.
 /// Asserts `flt` to be a *float* type.
@@ -407,7 +423,7 @@ pub inline fn isFinite(flt: anytype) bool {
 }
 
 test isFinite {
-    @setEvalBranchQuota(1500);
+    @setEvalBranchQuota(2000);
     inline for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
         // normals
         try expectEqual(true, isFinite(min(T, .normal)));
@@ -625,7 +641,7 @@ test checkedAdd {
 }
 
 /// Returns the product of `a` * `b`.
-/// Asserts `T_flt` to be an *float* type.
+/// Asserts `T_flt` to be a *float* type.
 /// Compute - *very cheap*, basic operation and comparison.
 /// Issue key specs:
 /// - Throws *Overflow* when result would be *non-finite*.
@@ -646,13 +662,13 @@ test checkedMul {
 }
 
 /// Returns the difference of `a` - `b`.
-/// Asserts `T_flt` to be an *float* type.
+/// Asserts `T` to be a *float* type.
 /// Compute - *very cheap*, basic operation and comparison.
 /// Issue key specs:
 /// - Throws *Underflow* when result would be *non-finite*.
-pub inline fn checkedSub(comptime T_flt: type, a: T_flt, b: T_flt) ValueError!T_flt {
-    comptime assertType(T_flt, .{ .float, .comptime_float });
-    switch (T_flt) { // * comptime prune
+pub inline fn checkedSub(comptime T: type, a: T, b: T) ValueError!T {
+    comptime assertType(T, .{ .float, .comptime_float });
+    switch (T) { // * comptime prune
         comptime_float => return a - b,
         else => {
             const result = a - b;
@@ -665,3 +681,85 @@ test checkedSub {
     try expectEqual(1.0, checkedSub(f16, 4.0, 3.0));
     try expectError(error.Underflow, checkedSub(f16, -32768, 32768));
 }
+
+/// Check if `flt` is some power of two.
+/// Asserts `flt` to be a *float* type.
+pub inline fn isPowerOf2(flt: anytype) bool {
+    comptime assertType(@TypeOf(flt), .{ .float, .comptime_float });
+
+    if (flt <= 0) return false;
+
+    const T_flt = @TypeOf(flt);
+    switch (@typeInfo(T_flt)) { // * comptime prune
+        .float => {
+            const T_bits = TInt(.unsigned, @typeInfo(T_flt).float.bits);
+            const n_bit_oper: T_bits = @bitCast(flt);
+            const mantissa = (n_bit_oper & mantissaMax(T_flt));
+            return (isNormal(flt) and mantissa == 0); // * po2 implied
+        },
+        .comptime_float => {
+            return (flt == @trunc(@log2(flt)));
+        },
+        else => unreachable,
+    }
+}
+
+test isPowerOf2 {
+    try expectEqual(true, isPowerOf2(4.0));
+    try expectEqual(true, isPowerOf2(@as(f16, 4.0)));
+    try expectEqual(true, isPowerOf2(@as(f16, 2.0)));
+    try expectEqual(true, isPowerOf2(@as(f16, 1.0)));
+    //
+    try expectEqual(false, isPowerOf2(3.0));
+    try expectEqual(false, isPowerOf2(@as(f16, 3.0)));
+    try expectEqual(false, isPowerOf2(@as(f16, 0.0)));
+    try expectEqual(false, isPowerOf2(@as(f16, -1.0)));
+    try expectEqual(false, isPowerOf2(inf(f16, .positive)));
+    try expectEqual(false, isPowerOf2(nan(f16, .positive, .quiet)));
+}
+
+/// Returns the next power of two (equal or greater than `flt`).
+/// Asserts `flt` to be a *float* type.
+/// Compute - *very cheap*, few basic and specific operations.
+/// Issue key specs:
+/// TODO, complete this \/
+/// - Throws *Overflow* when result would overflow `@TypeOf(flt)`.
+pub fn nextPowerOf2(flt: anytype) ValueError!@TypeOf(flt) {
+    comptime assertType(@TypeOf(flt), .{ .float, .comptime_float });
+
+    if (flt <= 1) return 1;
+
+    const T_flt = @TypeOf(flt);
+    switch (@typeInfo(T_flt)) { // * comptime prune
+        .float => {
+            if (!isFinite(flt)) return error.UnableToHandle;
+            const result = @exp2(@ceil(@log2(flt)));
+            if (isInf(result, .positive)) return error.Overflow;
+            return result;
+        },
+        .comptime_float => {
+            return @exp2(@ceil(@log2(flt)));
+        },
+        else => unreachable,
+    }
+}
+
+test nextPowerOf2 {
+    // greater
+    try expectEqual(4.0, nextPowerOf2(@as(f16, 3.0)));
+    try expectEqual(4.0, nextPowerOf2(@as(comptime_float, 3.0)));
+    // equal
+    try expectEqual(2.0, nextPowerOf2(@as(f16, 2.0)));
+    try expectEqual(2.0, nextPowerOf2(@as(comptime_float, 2.0)));
+    // edge cases
+    try expectEqual(1.0, nextPowerOf2(@as(f16, 0)));
+    try expectEqual(1.0, nextPowerOf2(@as(f16, -1.0)));
+    try expectError(error.Overflow, nextPowerOf2(max(f16)));
+    try expectError(error.UnableToHandle, nextPowerOf2(inf(f16, .positive)));
+    try expectError(error.UnableToHandle, nextPowerOf2(nan(f16, .positive, .quiet)));
+    //
+    try expectEqual(1.0, nextPowerOf2(@as(comptime_float, 0)));
+    try expectEqual(1.0, nextPowerOf2(@as(comptime_float, -1.0)));
+}
+
+pub fn minRepBits() void {} // TODO: implement this

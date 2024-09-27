@@ -1,4 +1,5 @@
 // Author: palsmo
+// Status: In Progress
 
 const std = @import("std");
 
@@ -9,14 +10,8 @@ const Entry = config.Entry;
 const ModuleCache = std.StringHashMap(*std.Build.Module);
 const manifest = config.manifest;
 
-var modcache: ModuleCache = undefined;
-
 const test_targets = [_]std.Target.Query{
     .{}, // native
-};
-
-const step = struct {
-    var tst: *std.Build.Step = undefined;
 };
 
 pub fn build(b: *std.Build) !void {
@@ -29,11 +24,9 @@ pub fn build(b: *std.Build) !void {
     _ = target;
     _ = optimize;
 
-    step.tst = b.step("test", "Run test blocks");
+    const step_tst = b.step("test", "Run test blocks");
 
     const op_source = b.option([]const u8, "source", "Source to operate on");
-
-    modcache = ModuleCache.init(allocator);
 
     for (manifest.entries) |entry| {
         var onetrickpony = false;
@@ -42,20 +35,22 @@ pub fn build(b: *std.Build) !void {
         }
 
         for (entry.make) |make| switch (make) {
-            .mod => {}, // TODO: implement
-            .run => {}, // TODO: implement
-            .tst => try instateTesting(b, &entry),
+            .mod => try instatePubModule(),
+            .run => try instateRunning(),
+            .tst => try instateTesting(b, &entry, step_tst, allocator),
         };
 
         if (onetrickpony) break;
     }
 }
 
-fn instateTesting(b: *std.Build, entry: *const Entry) !void {
-    const optimize: std.builtin.OptimizeMode = .Debug;
+fn instatePubModule() !void {}
 
-    // TODO: should have it's own module cache, since modules may be for different targets,
-    // single cache will interfere
+fn instateRunning() !void {}
+
+fn instateTesting(b: *std.Build, entry: *const Entry, step: *std.Build.Step, allocator: Allocator) !void {
+    const optimize: std.builtin.OptimizeMode = .Debug;
+    var modcache = ModuleCache.init(allocator);
 
     for (test_targets) |target| {
         const r_target = b.resolveTargetQuery(target);
@@ -74,12 +69,13 @@ fn instateTesting(b: *std.Build, entry: *const Entry) !void {
         });
 
         try modcache.put("project", prj_mod);
-        tst_obj.root_module.addImport("project", prj_mod);
+        var tst_mod = tst_obj.root_module;
+        tst_mod.addImport("project", prj_mod);
 
-        if (entry.deps.len != 0) try linkDeps(b, &(tst_obj.root_module), entry.deps, r_target, optimize);
+        if (entry.deps.len != 0) try linkDeps(b, &tst_mod, entry.deps, r_target, optimize, &modcache);
 
         const tst_run = b.addRunArtifact(tst_obj);
-        step.tst.dependOn(&tst_run.step);
+        step.dependOn(&tst_run.step);
     }
 }
 
@@ -89,6 +85,7 @@ fn linkDeps(
     deps: []const []const u8,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    modcache: *ModuleCache,
 ) !void {
     var vstack = std.ArrayList([]const u8).init(b.allocator);
     defer vstack.deinit();

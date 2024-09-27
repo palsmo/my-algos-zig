@@ -1,21 +1,24 @@
 //! Author: palsmo
 //! Status: In Progress
-//! About: ...
+//! Brief: ...
 
 const std = @import("std");
 const builtin = std.builtin;
 
 const mod_assert = @import("../assert/root.zig");
+const mod_math = @import("../math/root.zig");
 
+const Signedness = builtin.Signedness;
 const assertComptime = mod_assert.assertComptime;
 const assertFn = mod_assert.assertFn;
 const assertType = mod_assert.assertType;
 const comptimePrint = std.fmt.comptimePrint;
 const expectEqual = std.testing.expectEqual;
 const panic = std.debug.panic;
+const nextPowerOf2 = mod_math.int.nextPowerOf2;
 
 /// Constructs a specific *integer* type.
-pub fn TInt(comptime signedness: builtin.Signedness, comptime bit_count: u16) type {
+pub fn TInt(comptime signedness: Signedness, comptime bit_count: u16) type {
     return @Type(.{ .int = .{ .signedness = signedness, .bits = bit_count } });
 }
 
@@ -52,6 +55,26 @@ pub fn Child(comptime P: type) type {
             .{@typeName(P)},
         )),
     };
+}
+
+/// Returns promoted `T` with bits being next power of two.
+pub fn NextPowerOf2(T: type) type {
+    comptime assertType(T, .{ .int, .float });
+    return switch (@typeInfo(T)) {
+        .int => |info| TInt(info.signedness, nextPowerOf2(info.bits) catch {
+            @compileError("Overflows 'usize'");
+        }),
+        .float => |info| TFloat(nextPowerOf2(info.bits) catch {
+            @compileError("Overflows 'usize'");
+        }),
+        else => unreachable,
+    };
+}
+
+test NextPowerOf2 {
+    try expectEqual(u1, NextPowerOf2(u0));
+    try expectEqual(u16, NextPowerOf2(u8));
+    try expectEqual(f32, NextPowerOf2(f16));
 }
 
 /// Verify properties of namespace `ctx` against `decls`.
@@ -201,7 +224,7 @@ test isString {
     try expectEqual(true, isString(*const [4:0]u8)); // single-item pointer
     try expectEqual(true, isString([*c]const u8)); // c pointer
     try expectEqual(true, isString(@TypeOf("literal"))); // literal
-    // test negatives
+    //
     try expectEqual(false, isString(u8)); // not string
     try expectEqual(false, isString([*]const u8)); // not terminated
 }

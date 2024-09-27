@@ -26,7 +26,7 @@ const panic = std.debug.panic;
 /// Asserts `vec_a` and `vec_b` to be the same *numeric vector* type.
 /// Compute - *very cheap*, few basic operations.
 /// Issue key specs:
-/// - Throws error when calculation overflows (only *.Safe* `exec_mode`).
+/// - Throws error when calculation overflows (only *.safe* `exec_mode`).
 pub inline fn dot(vec_a: anytype, vec_b: anytype, comptime exec_mode: ExecMode) switch (exec_mode) {
     .uncheck => @TypeOf(vec_a[0]),
     .safe => !@TypeOf(vec_a[0]),

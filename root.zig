@@ -24,7 +24,6 @@ pub const errors = struct {
     /// --------------------------------------------------------------------------------------------
     pub const ValueError = error{
         OutOfRange,
-        OutsideBound,
         Overflow,
         Underflow,
         UnableToHandle,

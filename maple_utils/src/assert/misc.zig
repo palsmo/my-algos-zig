@@ -8,7 +8,6 @@ const mod_math = @import("../math/root.zig");
 
 const comptimePrint = std.fmt.comptimePrint;
 const panic = std.debug.panic;
-const isPowerOf2 = mod_math.misc.isPowerOf2;
 
 /// Assert `dictum` is true, panic otherwise.
 /// Display a formatted message with `fmt` and `args`.
@@ -117,19 +116,20 @@ test assertFn {
     }
 }
 
-/// Assert `int` is some power of 2.
-pub inline fn assertPowerOf2(int: anytype) void {
-    comptime assertType(@TypeOf(int), .{ .int, .comptime_int });
-    if (isPowerOf2(int)) return;
-    panic("Value is not a power of two, found '{}'", .{int});
+/// Assert `n` is some power of 2.
+pub inline fn assertPowerOf2(n: anytype) void {
+    comptime assertType(@TypeOf(n), .{ .int, .float, .comptime_int, .comptime_float });
+    switch (@typeInfo(@TypeOf(n))) {
+        .int => if (mod_math.int.isPowerOf2(n)) return,
+        .float => if (mod_math.float.isPowerOf2(n)) return,
+        else => unreachable,
+    }
+    panic("Value is not a power of two, found '{}'", .{n});
 }
 
 test assertPowerOf2 {
     assertPowerOf2(1);
     assertPowerOf2(2);
-    // TODO! test panic case, currently not possible :(
-    // assertPowerOf2(0);
-    // assertPowerOf2(3);
 }
 
 /// Assert `T` matches any of `types`.
